@@ -1,0 +1,6 @@
+# Shared service settings, read by systemd. Restart paddleocr-service after edits.
+# For clients on other machines, bind a specific reachable server interface:
+# PADDLEOCR_BIND=tcp://192.168.0.10:5555
+PADDLEOCR_BIND=tcp://127.0.0.1:5555
+PADDLEOCR_DEVICE=cpu
+PADDLEOCR_LANG=en

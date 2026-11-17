@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+service_dir=$(dirname -- "$(readlink -f -- "$0")")
+app=$(dirname -- "$service_dir")
+export PYTHONHOME="$app/python"
+unset PYTHONPATH
+export PYTHONNOUSERSITE=1
+export PYTHONDONTWRITEBYTECODE=1
+export LD_LIBRARY_PATH="$app/python/lib"
+export PADDLE_PDX_CACHE_HOME="${PADDLE_PDX_CACHE_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/paddleocr-service}"
+export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+export PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=False
+export PADDLEOCR_MODEL_ROOT="$service_dir/models"
+mkdir -p "$PADDLE_PDX_CACHE_HOME"
+if [ "${1:-}" = --check ]; then
+    exec "$app/python/bin/python3" -c 'import sys, ssl, cv2, zmq, numpy, paddle, paddleocr; print("Embedded Python and PaddleOCR imports: OK", sys.version)'
+fi
+exec "$app/python/bin/python3" -u "$service_dir/server.py" "$@"

@@ -1,0 +1,26 @@
+[Unit]
+Description=Shared serial CPU PaddleOCR service
+After=network.target
+
+[Service]
+Type=exec
+DynamicUser=yes
+StateDirectory=paddleocr-service
+CacheDirectory=paddleocr-service
+WorkingDirectory=/var/lib/paddleocr-service
+Environment=HOME=/var/lib/paddleocr-service
+Environment=PADDLE_PDX_CACHE_HOME=/var/cache/paddleocr-service
+Environment=PADDLEOCR_BIND=tcp://127.0.0.1:5555
+Environment=PADDLEOCR_DEVICE=cpu
+EnvironmentFile=-/etc/paddleocr-service/settings
+ExecStart=/opt/paddleocr-service/ocr/launch
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

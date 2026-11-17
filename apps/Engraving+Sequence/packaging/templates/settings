@@ -1,0 +1,9 @@
+# Shell assignments. System defaults; per-user overrides can be placed in
+# ~/.config/engraving-sequence/settings. Restart the GUI after changing them.
+# PLC register protocol is unchanged: trigger 0=77; OK 4=99; NG 2=88.
+SEQUENCE_MODBUS_HOST=192.168.0.68
+SEQUENCE_MODBUS_PORT=4998
+SEQUENCE_MODBUS_SLAVE=3
+SEQUENCE_CAMERA=Hikvision
+PADDLEOCR_ENDPOINT=tcp://127.0.0.1:5555
+PADDLEOCR_TIMEOUT_MS=120000

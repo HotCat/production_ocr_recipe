@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Engraving Sequence
+Name[zh_CN]=产品刻字顺号OCR检测工具
+Comment=Camera inspection with serial number OCR and PLC integration
+Exec=/usr/bin/engraving-sequence
+Icon=camera-photo
+Terminal=false
+Categories=Graphics;Engineering;
+StartupNotify=false

@@ -1,0 +1,53 @@
+#!/bin/sh
+set -eu
+# Resolve symlinks so this also works as /usr/bin/engraving-sequence.
+app=$(dirname -- "$(readlink -f -- "$0")")
+if [ -r /etc/engraving-sequence/settings ]; then
+    set -a
+    . /etc/engraving-sequence/settings
+    set +a
+fi
+config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+if [ -r "$config_home/engraving-sequence/settings" ]; then
+    set -a
+    . "$config_home/engraving-sequence/settings"
+    set +a
+fi
+export LD_LIBRARY_PATH="$app/native/lib:$app/mvs/lib/64:$app/mvs/lib/64/ThirdParty"
+export MVCAM_SDK_PATH="$app/mvs"
+export MVCAM_COMMON_RUNENV="$app/mvs/lib"
+export MVCAM_SOFTWARE_LIBENV="$app/mvs/lib"
+export GENICAM_GENTL64_PATH="$app/mvs/lib/64"
+if [ "${1:-}" = --check ]; then
+    deps=$(ldd "$app/bin/Camera")
+    if printf '%s\n' "$deps" | grep -q 'not found'; then
+        printf '%s\n' "$deps" >&2
+        exit 1
+    fi
+    for item in font/DroidSans.ttf font/7s.ttf font/Rabbit.ttf font/msyhl.ttc vert.glsl frag.glsl img/container.jpg img/feitian.png src/window.png; do
+        test -r "$app/assets/$item"
+    done
+    printf '%s\n' 'GUI libraries and assets: OK'
+    exit 0
+fi
+state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+state="$state_home/engraving-sequence"
+mkdir -p "$state/work" "$state/runtime" "$HOME/ocrconfigs/sequence3"
+chmod 700 "$state" "$state/runtime"
+# Hold the lock until the GUI exits, avoiding camera/config conflicts between instances.
+exec 9>"$state/session.lock"
+if ! flock -n 9; then
+    printf '%s\n' 'Engraving Sequence is already running for this user.' >&2
+    exit 1
+fi
+export SEQUENCE_RUNTIME_DIR="$state/runtime"
+for item in font img src vert.glsl frag.glsl; do
+    ln -sfn "$app/assets/$item" "$state/work/$item"
+done
+for source in "$app/defaults/"*.scm; do
+    target="$HOME/ocrconfigs/sequence3/$(basename -- "$source")"
+    # Existing production calibration survives upgrades and reinstalls.
+    if [ ! -e "$target" ]; then cp "$source" "$target"; fi
+done
+cd "$state/work"
+exec "$app/bin/Camera" "$@"

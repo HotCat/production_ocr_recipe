@@ -1,0 +1,89 @@
+cabal-version:       1.23
+name:                Camera
+version:             0.1.0.0
+license-file:        LICENSE
+author:              David Johnson
+maintainer:          djohnson.m@gmail.com
+build-type:          Simple
+
+executable Camera
+  hs-source-dirs: src
+  main-is:  
+    Main.hs
+  Other-Modules:
+    Parser
+    Animate
+    IdentityList
+    Diagnostics
+    Object
+    ObjectBehavior
+    TextRecog
+    Barcode
+    BarcodeGuard
+
+  cc-options: -Wall -std=c++11
+  ghc-options: -O2 -threaded -funbox-strict-fields -rtsopts
+  build-depends:
+      base < 5
+    , gl
+    , GLFW-b
+    , linear
+    , vector
+    , bytestring
+    , bindings-GLFW
+    , JuicyPixels
+    , JuicyPixels-extra
+    , Yampa
+    , dear-imgui
+    , containers
+    , StateVar
+    , inline-c
+    , inline-c-cpp
+    , text
+    , opencv
+    , data-default
+    , primitive
+    , transformers
+    , time
+    , monad-parallel
+    , parallel
+    , deepseq
+    , async
+    , mtl
+    , stm
+    , array
+    , parsec
+    , directory
+    , husk-scheme
+    , system-fileio
+    , raw-strings-qq
+    , random
+    , process
+    , template-haskell
+    , sqlite-simple
+    , mwc-random
+    , filepath
+    , regex-tdfa
+    , clock
+
+  default-language: Haskell2010
+
+
+  pkgconfig-depends: opencv >= 3.0.0
+  extra-libraries: zbar MVSDK zmq MvCameraControl
+
+  ld-options: -Wl,-rpath,/opt/MVS/lib/64
+
+  extra-lib-dirs:
+    /lib
+    /usr/local/lib
+    /opt/MVS/lib/64
+
+  include-dirs:
+    src
+    /opt/MVS/include
+    ../../dependencies/modbuspp
+
+
+
+

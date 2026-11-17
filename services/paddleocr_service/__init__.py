@@ -1,0 +1,1 @@
+"""Shared PaddleOCR ZeroMQ service."""

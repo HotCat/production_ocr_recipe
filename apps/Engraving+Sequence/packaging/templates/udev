@@ -1,0 +1,4 @@
+# USB camera access for a local logged-in desktop user, without running the GUI as root.
+SUBSYSTEM=="usb", ATTR{idVendor}=="2bdf", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="f622", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="080b", MODE="0660", GROUP="plugdev", TAG+="uaccess"
