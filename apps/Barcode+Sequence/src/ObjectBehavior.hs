@@ -23,6 +23,8 @@ module ObjectBehavior (
    combineAll
 ) where
 
+import qualified ProductionLog as PL
+
 import           FRP.Yampa
 import           Object
 import           Parser
@@ -459,7 +461,11 @@ overLord' g sg = proc oi -> do
                              serStart marker, serEnd marker)) seq
                           decision = maybe (ProductionRejected "无效的条码检测结果")
                                            (decideProduction enabled expected) inspection
+                          logVerdict passed message = PL.recordProduction $ (PL.productionEvent "Barcode+Sequence" passed)
+                            { PL.eventBarcode = curSerial, PL.eventGuard = Just enabled
+                            , PL.eventReverse = Just b10, PL.eventReason = message }
                           reject message = do
+                            logVerdict False message
                             ocrState $=! OcrFail
                             modifyIORef' ng (+1)
                             modbusNg
@@ -468,6 +474,7 @@ overLord' g sg = proc oi -> do
                         ProductionRejected reason -> reject reason
                         SequenceUnconfigured -> return ()
                         SequenceMatched -> do
+                          logVerdict True "顺号匹配"
                           case seq of
                             Just marker -> refSeq $=! Just (marker {serBody = serBody marker + (if b10 then -1 else 1)})
                             Nothing -> return ()

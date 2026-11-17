@@ -15,6 +15,8 @@
 
 module Main where
 
+import qualified ProductionLog as PL
+
 import           Codec.Picture
 import           Codec.Picture.Extra    (flipVertically)
 import           Codec.Picture.Types
@@ -255,6 +257,7 @@ checkBarcodePair productGuard packagingGuard productPath packagingPath = do
 
 mainGui :: IO ()
 mainGui = do
+  PL.initializeProductionLog "Barcode+Sequence+Barcode"
   modbusInit
   createDirectoryIfMissing False "/dev/shm/doublebarcode"
   dir <- getHomeDirectory

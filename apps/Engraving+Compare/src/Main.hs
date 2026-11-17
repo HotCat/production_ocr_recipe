@@ -15,6 +15,8 @@
 
 module Main where
 
+import qualified ProductionLog as PL
+
 import RuntimePaths
 import EngravingCompare
 
@@ -237,6 +239,7 @@ main = do
 
 mainGui :: IO ()
 mainGui = do
+  PL.initializeProductionLog "Engraving+Compare"
   modbusInit
   runtimeDir <- getRuntimeDirectory
   createDirectoryIfMissing True runtimeDir

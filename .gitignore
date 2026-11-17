@@ -43,3 +43,9 @@ Camera3
 .agents/
 
 runtime-libraries.local.json
+
+# Production history and SQLite transaction files
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm

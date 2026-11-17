@@ -24,6 +24,9 @@ class LauncherUiTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        self.production_env = patch.dict(os.environ, OCR_PRODUCTION_LOG_DIR=str(self.root / 'production'))
+        self.production_env.start()
+        self.addCleanup(self.production_env.stop)
         self.store = ConfigStore(self.root / 'config.json')
         self.store.load()
         self.manager = ProcessManager(self.root / 'state')

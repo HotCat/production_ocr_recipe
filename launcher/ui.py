@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
 
 from .config import ConfigStore, REPOSITORY, choices_for, launch_spec, parameter_value
 from .processes import AlreadyRunning, ProcessManager
+from .production import APPLICATIONS, ClockError, ProductionHistory, display_time
+from .history_ui import ProductionHistoryWindow
 
 
 class LauncherWindow(QMainWindow):
@@ -24,6 +26,8 @@ class LauncherWindow(QMainWindow):
         self.config = copy.deepcopy(store.data)
         self.manager = manager or ProcessManager()
         self.repository = repository
+        self.history_windows = {}
+        self.clock_error = None
         self.selected_id: str | None = None
         self.editors: dict[str, QWidget] = {}
         self.rows: dict[str, QTreeWidgetItem] = {}
@@ -59,6 +63,10 @@ class LauncherWindow(QMainWindow):
         subtitle = QLabel("选择检测程序，确认相机和控制器参数后启动。每个程序仅允许运行一个实例。", objectName="muted")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
+        self.clock_banner = QLabel()
+        self.clock_banner.setWordWrap(True)
+        self.clock_banner.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.clock_banner)
         toolbar = QHBoxLayout()
         self.config_path = QLabel(str(store.path), objectName="muted")
         self.config_path.setWordWrap(True)
@@ -118,6 +126,10 @@ class LauncherWindow(QMainWindow):
         self.save_button.setObjectName("saveParameters")
         self.save_button.clicked.connect(self.save_parameters)
         actions.addWidget(self.save_button)
+        self.history_button = QPushButton("生产记录 / 日历")
+        self.history_button.setObjectName("productionHistory")
+        self.history_button.clicked.connect(self.show_production_history)
+        actions.addWidget(self.history_button)
         actions.addStretch()
         self.launch_button = QPushButton("启动程序", objectName="launch")
         self.launch_button.clicked.connect(self.launch_selected)
@@ -214,6 +226,37 @@ class LauncherWindow(QMainWindow):
         self.log_view.clear()
         self.refresh_status()
 
+    def show_production_history(self) -> None:
+        program = self.program()
+        if not program:
+            return
+        app = program.get("production_app", program["id"])
+        if app not in APPLICATIONS:
+            return
+        window = self.history_windows.get(app)
+        if window is None:
+            window = ProductionHistoryWindow(ProductionHistory(app, self.manager.production_directory), program["name"], self)
+            self.history_windows[app] = window
+        window.query()
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def refresh_clock(self) -> None:
+        previous = self.clock_error
+        try:
+            state = self.manager.clock_status()
+            self.clock_error = None
+            self.clock_banner.setText("时间检查正常  ·  上次生产：" + display_time(state['last_production_us']))
+            self.clock_banner.setStyleSheet("color: #16704b; padding: 6px;")
+        except (OSError, ValueError) as error:
+            self.clock_error = str(error)
+            self.clock_banner.setText(self.clock_error)
+            self.clock_banner.setStyleSheet("color: #b42318; background: #fee4e2; padding: 10px;")
+            if previous is None:
+                message = self.clock_error
+                QTimer.singleShot(0, lambda: self.report_error(ClockError(message)))
+
     def report_error(self, error: Exception) -> None:
         QMessageBox.warning(self, "无法完成操作", str(error))
 
@@ -280,6 +323,7 @@ class LauncherWindow(QMainWindow):
         return "已关闭" if state["state"] == "stopped" else "就绪"
 
     def refresh_status(self) -> None:
+        self.refresh_clock()
         program = self.program()
         for item in self.config["programs"]:
             key = item.get("instance_key", item["id"])
@@ -291,7 +335,8 @@ class LauncherWindow(QMainWindow):
                 row.setForeground(1, QColor(color))
         state = self.manager.status(program.get("instance_key", program["id"])) if program else None
         busy = bool(state and state["running"])
-        self.launch_button.setEnabled(program is not None and not busy)
+        self.launch_button.setEnabled(program is not None and not busy and self.clock_error is None)
+        self.history_button.setEnabled(bool(program and program.get("production_app", program["id"]) in APPLICATIONS))
         self.launch_button.setText("程序运行中" if busy else "启动程序")
         self.save_button.setEnabled(program is not None and not busy)
         for editor in self.editors.values():

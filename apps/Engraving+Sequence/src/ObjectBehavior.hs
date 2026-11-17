@@ -23,6 +23,8 @@ module ObjectBehavior (
    combineAll
 ) where
 
+import qualified ProductionLog as PL
+
 import RuntimePaths
 
 import           FRP.Yampa
@@ -342,7 +344,15 @@ winPeriod' sg = proc oi -> do
                                  chkSer $=! Nothing
                                  atomically $ writeTChan collect_batch $ "base number is not set!"
                                (Just seq) -> do
-                                 curSerial <- predictOcr r ocr
+                                 result <- try (predictOcr r ocr) :: IO (Either IOException String)
+                                 curSerial <- case result of
+                                   Right value -> pure value
+                                   Left failure -> do
+                                     PL.rememberObservation "engraving.error" (displayException failure)
+                                     ocrState $=! OcrFail
+                                     chkSer $=! Nothing
+                                     pure ""
+                                 PL.rememberObservation "engraving.raw" curSerial
                                  let curSerial' = (T.unpack (T.filter (\n-> (isNumber n)) $ T.pack curSerial)) -- (T.unpack (T.filter (\n-> (isNumber n) || (isAlpha n)) $ T.pack curSerial))
                                      curNum = if (serStart seq < serEnd seq) then (slice (serStart seq) (serEnd seq) curSerial') else (slice (serEnd seq) (serStart seq) curSerial')
                                  tr $=! Just curSerial'
@@ -580,20 +590,31 @@ overLord' g sg = proc oi -> do
                             Nothing -> return ()
                             (Just seq) -> do
                               let baseNum = printf ("%0" ++ show (abs (serStart seq - serEnd seq)) ++ "d") (serBody seq)
-                              when (isNothing b10) $ chkSer $=! (Just baseNum)
+                              when (isNothing b10) $ do
+                                PL.rememberObservation "engraving.raw" ""
+                                PL.rememberObservation "engraving.error" ""
+                                chkSer $=! Just baseNum
 
+                        logVerdict passed reason = do
+                          raw <- PL.readObservation "engraving.raw"
+                          failure <- PL.readObservation "engraving.error"
+                          PL.recordProduction $ (PL.productionEvent "Engraving+Sequence" passed)
+                            { PL.eventSerial = T.unpack (T.filter isNumber (T.pack raw)), PL.eventDetected = raw, PL.eventReverse = Just b12
+                            , PL.eventReason = reason ++ failure }
                         serM = do
                           case os of
                             OcrPass -> do
                               case seq of
                                 Nothing -> return ()
                                 (Just seq) -> do
+                                  logVerdict True "顺号匹配"
                                   if b12 then refSeq $=! (Just $ seq {serBody = (serBody seq) - 1})
                                     else refSeq $=! (Just $ seq {serBody = (serBody seq) + 1})
                                   modifyIORef' ok (+1)
                                   modbusOk
                             
                             OcrFail -> do
+                              logVerdict False "刻字检测失败/顺号不连续 "
                               modifyIORef' ng (+1)
                               modbusNg
                             

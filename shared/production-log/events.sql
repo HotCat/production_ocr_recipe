@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS production_events (
+ id INTEGER PRIMARY KEY,
+ app TEXT NOT NULL,
+ occurred_at_us INTEGER NOT NULL,
+ timestamp_utc TEXT NOT NULL,
+ timestamp_local TEXT NOT NULL,
+ local_date TEXT NOT NULL,
+ result TEXT NOT NULL CHECK(result IN ('OK','NG')),
+ barcode TEXT NOT NULL DEFAULT '',
+ packaging_barcode TEXT NOT NULL DEFAULT '',
+ serial_number TEXT NOT NULL DEFAULT '',
+ detected_text TEXT NOT NULL DEFAULT '',
+ preset_text TEXT NOT NULL DEFAULT '',
+ bank TEXT NOT NULL DEFAULT '',
+ bank_index INTEGER,
+ bank_serial_length INTEGER,
+ integrity_guard INTEGER CHECK(integrity_guard IN (0,1)),
+ reverse INTEGER CHECK(reverse IN (0,1)),
+ packaging_integrity_guard INTEGER CHECK(packaging_integrity_guard IN (0,1)),
+ reason TEXT NOT NULL DEFAULT ''
+)

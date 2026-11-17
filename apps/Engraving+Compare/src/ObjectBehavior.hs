@@ -23,6 +23,8 @@ module ObjectBehavior (
    combineAll
 ) where
 
+import qualified ProductionLog as PL
+
 import RuntimePaths
 import EngravingCompare
 
@@ -655,8 +657,11 @@ serialNumOCR' runtime sg = proc oi -> do
                   completed <- pollComparison runtime
                   case completed of
                     Nothing -> return ()
-                    Just (InspectionDiscarded production) -> do
+                    Just (InspectionDiscarded production inspection) -> do
                       when production $ do
+                        PL.recordProduction $ (PL.productionEvent "Engraving+Compare" False)
+                          { PL.eventPreset = expectedText inspection, PL.eventDetected = recognizedText inspection
+                          , PL.eventReason = "预设文字或参数列表已改变，旧检测结果已丢弃" }
                         ocrState $=! OcrFail
                         modifyIORef' ng (+1)
                         modbusNg
@@ -664,6 +669,9 @@ serialNumOCR' runtime sg = proc oi -> do
                     Just (InspectionCompleted production inspection) -> do
                       atomically $ writeTChan (if production then collect_batch else collect) (formatComparison inspection)
                       when production $ do
+                        PL.recordProduction $ (PL.productionEvent "Engraving+Compare" (comparisonPassed inspection))
+                          { PL.eventPreset = expectedText inspection, PL.eventDetected = recognizedText inspection
+                          , PL.eventReason = comparisonDetail inspection }
                         if comparisonPassed inspection then do
                           ocrState $=! OcrPass
                           modifyIORef' ok (+1)

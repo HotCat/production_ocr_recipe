@@ -11,6 +11,7 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,7 @@ import threading
 import time
 
 from .config import atomic_json
+from .production import ClockGuard, ClockError, production_directory
 
 
 class AlreadyRunning(RuntimeError):
@@ -32,10 +34,20 @@ def default_state_directory() -> Path:
 
 
 class ProcessManager:
-    def __init__(self, directory: Path | None = None):
+    def __init__(self, directory: Path | None = None, production_dir: Path | None = None):
         self.directory = (directory or default_state_directory()).resolve()
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.children: list[subprocess.Popen] = []
+        self.production_directory = (production_dir or production_directory()).resolve()
+        self._clock = None
+
+    def clock_status(self, persist: bool = False) -> dict:
+        try:
+            if self._clock is None:
+                self._clock = ClockGuard(self.production_directory)
+            return self._clock.check(persist=True) if persist else self._clock.observe()
+        except (OSError, sqlite3.Error) as error:
+            raise ClockError(f"无法保存生产时间，已禁止启动：{error}") from error
 
     def paths(self, key: str) -> tuple[Path, Path, Path]:
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
@@ -66,6 +78,10 @@ class ProcessManager:
         return state
 
     def launch(self, key: str, spec: dict) -> None:
+        self.clock_status(persist=True)
+        # Every managed child shares the same protected time database and log root.
+        spec = dict(spec, environment=dict(spec.get("environment", {}),
+                    OCR_PRODUCTION_LOG_DIR=str(self.production_directory)))
         lock, record, log = self.paths(key)
         descriptor = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
         request = None
@@ -139,6 +155,7 @@ def supervise(request: Path, descriptor: int) -> int:
     # Leave previous logs available, marking each run with its actual timestamp.
     logger.info("\n=== %s | %s ===", spec["name"], time.strftime("%Y-%m-%d %H:%M:%S"))
     try:
+        ClockGuard(Path(spec["environment"]["OCR_PRODUCTION_LOG_DIR"])).check(persist=True)
         environment = dict(os.environ, **spec.get("environment", {}))
         child = subprocess.Popen(spec["command"], cwd=spec["cwd"], env=environment,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,

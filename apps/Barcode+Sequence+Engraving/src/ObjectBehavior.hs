@@ -23,6 +23,9 @@ module ObjectBehavior (
    combineAll
 ) where
 
+import qualified ProductionLog as PL
+import BankRecipes (bankRecipes, bankRecipe)
+
 import           FRP.Yampa
 import           Object
 import           Parser
@@ -320,7 +323,8 @@ winPeriod' sg = proc oi -> do
 
                            (Right r) -> do
                              bank <- get bankSelection
-                             let serialLength = if bank == 1 then 12 else 16
+                             PL.rememberObservation "engraving.bank" (show bank)
+                             let serialLength = snd (bankRecipe bank)
                              result <- try (predictOcr r ocr) :: IO (Either IOException String)
                              case result of
                                Left failure -> do
@@ -328,7 +332,8 @@ winPeriod' sg = proc oi -> do
                                  chkSer $=! Nothing
                                  atomically $ writeTChan collect_batch $
                                    "serial number ng " ++ curSerial ++ "; PaddleOCR: " ++ displayException failure
-                               Right serNum ->
+                               Right serNum -> do
+                                 PL.rememberObservation "engraving.raw" serNum
                                  when ((T.unpack (T.takeEnd serialLength (T.filter (\n-> (isNumber n) || (isAlpha n)) $ T.pack serNum))) == curSerial) $ do
                                    ocrState $=! OcrPass
                                    chkSer $=! Nothing
@@ -554,6 +559,7 @@ overLord' g runtime sg = proc oi -> do
                       (Just (ChanHub2 collect_batch)) = Map.lookup "barcode-ocr-collect-batch" ctrlMaps'
                       (Just (TrigHub1 chkSer)) = Map.lookup "serial-number-ocr-trigger" ctrlMaps'
                       (Just (PinHub1 guardSetting)) = Map.lookup "barcode-printed-text-guard" ctrlMaps'
+                      (Just (CombHub1 bankSetting)) = Map.lookup "serial-number-bank" ctrlMaps'
 
                   let FontSet{..} = fontSet
                   pushFont msyhlFont
@@ -562,7 +568,22 @@ overLord' g runtime sg = proc oi -> do
                   setNextWindowSize size ImGuiCond_Once
                   bracket_ (begin3 "识别结果") end $ do
 
-                    let reject message = do
+                    let logVerdict passed reason = do
+                          enabled <- get guardSetting
+                          selectedBank <- get bankSetting
+                          observedBank <- PL.readObservation "engraving.bank"
+                          let bank = maybe selectedBank id (R.readMaybe observedBank)
+                          raw <- PL.readObservation "engraving.raw"
+                          let (bankName, serialLength) = bankRecipe bank
+                          PL.recordProduction $ (PL.productionEvent "Barcode+Sequence+Engraving" passed)
+                            { PL.eventBarcode = curSerial
+                            , PL.eventSerial = T.unpack (T.takeEnd serialLength (T.filter (\n -> isNumber n || isAlpha n) (T.pack raw)))
+                            , PL.eventDetected = raw
+                            , PL.eventGuard = Just enabled, PL.eventReverse = Just b11
+                            , PL.eventBank = bankName, PL.eventBankIndex = Just bank
+                            , PL.eventBankSerialLength = Just serialLength, PL.eventReason = reason }
+                        reject message = do
+                          logVerdict False message
                           ocrState $=! OcrFail
                           modifyIORef' ng (+1)
                           modbusNg
@@ -570,6 +591,8 @@ overLord' g runtime sg = proc oi -> do
                           atomically $ writeTChan collect_batch ("NG " ++ message ++ " 条码=" ++ show curSerial ++ "\n")
                         barM = do
                           when (isEvent approach) $ do
+                            PL.rememberObservation "engraving.raw" ""
+                            PL.rememberObservation "engraving.bank" ""
                             enabled <- get guardSetting
                             let expected = fmap (\marker ->
                                   (printf ("%0" ++ show (abs (serStart marker - serEnd marker)) ++ "d") (serBody marker),
@@ -594,6 +617,7 @@ overLord' g runtime sg = proc oi -> do
                                 case seq of
                                   Nothing -> return ()
                                   Just marker -> do
+                                    logVerdict True "条码及刻字检测通过"
                                     refSeq $=! Just (marker {serBody = serBody marker + (if b11 then -1 else 1)})
                                     modifyIORef' ok (+1)
                                     modbusOk
@@ -601,6 +625,7 @@ overLord' g runtime sg = proc oi -> do
                               else reject "印字校验设置已改变，请重新检测"
                             
                             OcrFail -> do
+                              logVerdict False "刻字与条码不一致/刻字识别失败"
                               modifyIORef' ng (+1)
                               modbusNg
                               setBarcodeProductionBusy runtime False
@@ -1388,7 +1413,7 @@ serialNumOCR' sg = proc oi -> do
 
                   when result $ do
                     bracket_ (pushFont msyhlFont) popFont $ do
-                      combo "银行" bankSelection ["平安银行", "郑州银行"]
+                      combo "银行" bankSelection (map (T.pack . fst) bankRecipes)
                       sameLine
                       showHelp msyhlFont "平安银行：比较OCR结果末尾16位；郑州银行：比较末尾12位。比较前去除非字母数字字符。"
                     withID ("serial number":: Text) $ do

@@ -7,10 +7,11 @@ maintainer:          djohnson.m@gmail.com
 build-type:          Simple
 
 executable Camera
-  hs-source-dirs: src
+  hs-source-dirs: src ../../shared/production-log
   main-is:  
     Main.hs
   Other-Modules:
+    ProductionLog
     Parser
     Animate
     IdentityList

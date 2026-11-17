@@ -18,7 +18,8 @@ class DesktopStartupTests(unittest.TestCase):
             config = root / 'config.json'
             environment = dict(os.environ, OCR_LAUNCHER_PYTHON=sys.executable,
                                QT_QPA_PLATFORM='xcb', PYTHONFAULTHANDLER='1',
-                               PRODUCTION_OCR_LAUNCHER_STATE_DIR=str(root / 'state'))
+                               PRODUCTION_OCR_LAUNCHER_STATE_DIR=str(root / 'state'),
+                               OCR_PRODUCTION_LOG_DIR=str(root / 'production'))
             with tempfile.TemporaryFile(mode='w+') as output:
                 process = subprocess.Popen(
                     [str(REPOSITORY / 'scripts/run-launcher.sh'), '--config', str(config)],

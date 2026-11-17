@@ -15,6 +15,8 @@
 
 module Main where
 
+import qualified ProductionLog as PL
+
 import RuntimePaths
 
 import           Codec.Picture
@@ -218,6 +220,7 @@ main99 = do
 
 main :: IO ()
 main = do
+  PL.initializeProductionLog "Engraving+Sequence"
   modbusInit
   runtimeDir <- getRuntimeDirectory
   createDirectoryIfMissing True runtimeDir

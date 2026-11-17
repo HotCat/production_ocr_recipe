@@ -95,13 +95,13 @@ main = do
   syncComparisonSettings runtime 0
   putMVar release ()
   stale <- waitResult runtime
-  assert "edit-and-revert invalidates old pending result" (stale == InspectionDiscarded True)
+  assert "edit-and-revert invalidates old pending result" (stale == InspectionDiscarded True (compareEngraving "客服电话：96008" (Right "客服电话：96008")))
   _ <- queueComparison runtime True slow
   within (takeMVar started)
   syncComparisonSettings runtime 1
   putMVar release ()
   staleProfile <- waitResult runtime
-  assert "profile switch invalidates pending result" (staleProfile == InspectionDiscarded True)
+  assert "profile switch invalidates pending result" (staleProfile == InspectionDiscarded True (compareEngraving "客服电话：96008" (Right "客服电话：96008")))
   _ <- queueComparison runtime True (pure "客服电话：96008")
   recovery <- waitResult runtime
   assert "next inspection recovers" (case recovery of InspectionCompleted True result -> comparisonPassed result; _ -> False)

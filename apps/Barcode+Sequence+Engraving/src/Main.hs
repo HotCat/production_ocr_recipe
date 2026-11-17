@@ -15,6 +15,8 @@
 
 module Main where
 
+import qualified ProductionLog as PL
+
 import           Codec.Picture
 import           Codec.Picture.Extra    (flipVertically)
 import           Codec.Picture.Types
@@ -240,6 +242,7 @@ checkBarcodeImage enabled path = do
 
 mainGui :: IO ()
 mainGui = do
+  PL.initializeProductionLog "Barcode+Sequence+Engraving"
   modbusInit
   createDirectoryIfMissing False "/dev/shm/sequence2"
   dir <- getHomeDirectory

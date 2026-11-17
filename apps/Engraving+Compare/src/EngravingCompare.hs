@@ -66,7 +66,7 @@ data ComparisonRuntime = ComparisonRuntime
   , comparisonLastResult :: IORef (Maybe ComparisonResult)
   }
 
-data CompletedInspection = InspectionCompleted Bool ComparisonResult | InspectionDiscarded Bool
+data CompletedInspection = InspectionCompleted Bool ComparisonResult | InspectionDiscarded Bool ComparisonResult
   deriving (Eq, Show)
 
 newComparisonRuntime :: IO ComparisonRuntime
@@ -111,9 +111,9 @@ pollComparison runtime = do
         Just response -> do
           writeIORef (comparisonPending runtime) Nothing
           currentRevision <- readIORef (comparisonRevision runtime)
-          if revision /= currentRevision then pure (Just (InspectionDiscarded production)) else do
-            let result = case response of
-                  Right value -> value
-                  Left failure -> compareEngraving "" (Left (E.displayException failure))
+          let result = case response of
+                Right value -> value
+                Left failure -> compareEngraving "" (Left (E.displayException failure))
+          if revision /= currentRevision then pure (Just (InspectionDiscarded production result)) else do
             writeIORef (comparisonLastResult runtime) (Just result)
             pure (Just (InspectionCompleted production result))

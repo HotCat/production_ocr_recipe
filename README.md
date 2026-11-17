@@ -135,3 +135,14 @@ stay outside Git.
 
 See [THIRD_PARTY.md](THIRD_PARTY.md) for component notices. The import preserves
 the production working directories; development takes place in this new clone.
+
+## Production records
+
+All five clients record final OK/NG decisions in per-application SQLite databases.
+The launcher inspector's **生产记录 / 日历** button opens date distribution and
+query views. Shared persisted clock protection blocks production launches after
+system time regresses. See [launcher/README.md](launcher/README.md#production-history-and-offline-clock-protection)
+for fields, data locations, offline clock limits, backups and regression tests.
+The Haskell writer and SQL schemas are in `shared/production-log/`; keep that
+folder when copying or building this repository. Schemas are embedded in compiled
+clients, so deployed Haskell binaries do not require their source files.

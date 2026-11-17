@@ -194,3 +194,90 @@ covering the native initialization path that offscreen tests miss. The three mod
 clients were rebuilt, and their real Haskell/C++ Modbus modules reached an
 ephemeral loopback peer using configured IP/port/slave settings. The Chinese UI was rendered
 and visually checked at 1140×760.
+
+## Production history and offline clock protection
+
+Select a program and click **生产记录 / 日历** in its inspector. This opens a
+separate, reusable history window without interrupting inspection. The calendar
+shows each day's production count: green means all OK; red means at least one NG.
+Click a date or select a date range, optionally filter OK/NG or search a barcode,
+serial, detected/preset text, bank, or failure reason. Results have 200-row pages;
+double-click a row for all fields and complete text. Click 查询 / 刷新 for new
+records while the production app is running. History remains accessible when the
+clock guard blocks launches.
+
+The five apps each write their own SQLite database. The default directory is:
+
+```
+~/.local/share/production-ocr/production-logs/
+  Barcode+Sequence.sqlite3
+  Barcode+Sequence+Barcode.sqlite3
+  Barcode+Sequence+Engraving.sqlite3
+  Engraving+Sequence.sqlite3
+  Engraving+Compare.sqlite3
+  clock.sqlite3
+```
+
+`XDG_DATA_HOME` changes the data root; `OCR_PRODUCTION_LOG_DIR` overrides the whole
+directory. Set it for the launcher process (not independently per program): the
+launcher passes its resolved directory to every child. Directly started clients
+use the same defaults. Use one Unix operator account / one common directory for
+a workstation's production applications. Databases are outside the source tree,
+not committed to Git, and never automatically deleted.
+
+Only final production OK/NG decisions are inserted, immediately **before** the
+corresponding counter/PLC output. Preview/evaluation OCR attempts are excluded.
+No verdict is recorded where the existing workflow makes no decision (for
+example, a missing sequence marker). If a database write or time check fails,
+the app stops with an error rather than issuing an unrecorded PLC result. See
+运行日志 for that error. A row records the software's decision; it does not prove
+that the PLC received it, and an unexpected crash after commit may leave a row
+without a completed PLC signal.
+
+| Application | Recorded data in addition to OK/NG and timestamps |
+| --- | --- |
+| Barcode+Sequence | Full decoded barcode, integrity guard, Reverse |
+| Barcode+Sequence+Barcode | Both full decoded barcodes, independent integrity guards, the single product Reverse control |
+| Barcode+Sequence+Engraving | Full decoded barcode, serial and full OCR text, integrity guard, Reverse, bank name/index/serial length |
+| Engraving+Sequence | Numeric recognized serial, full OCR text, Reverse |
+| Engraving+Compare | Actual inspection preset and full detected text; no sequence requirement |
+
+Packaging has **no** separate Reverse control. Settings changes that invalidate
+pending engraving comparison results produce NG with the original preset and
+recognized text retained. Bank choices and their serial lengths share
+`apps/Barcode+Sequence+Engraving/src/BankRecipes.hs`; adding a bank there updates
+the combo and the name logged. Applicable settings are booleans; unrelated fields
+are SQL NULL or empty text. Each row includes UTC epoch microseconds, full UTC
+and local timestamps with fractional seconds, local timezone offset and local
+calendar date. The date distribution uses the local date saved at production,
+even if the workstation timezone later changes.
+
+The launcher displays the last production time and persists a shared time
+watermark. Startup, each actual launch, periodic launcher checks, and every
+production verdict check the clock. The last production time commits atomically
+with its event. If system time is earlier than recorded production/observed time,
+a warning explains the problem and all launch buttons are disabled. Correct the
+BIOS/Ubuntu date and time and inspect/replace the motherboard battery; the
+launcher automatically enables launches after time is valid. There is no Ignore
+button. Corrupt, inaccessible or incomplete clock state also blocks launching.
+
+The initial minimum date is 2026-11-17 00:00 UTC, so a fresh installation with a
+BIOS default date is rejected even before its first production run. With no
+network or trusted hardware clock this detects regression, **not** the absolute
+correct date, forward jumps, or deliberate deletion/restoration of state. Do not
+set the clock ahead: a subsequently corrected earlier date will remain blocked
+until it reaches the saved watermark. Never delete clock.sqlite3 to dismiss a
+time warning. The clock and history files must be preserved across deployments.
+
+For a consistent backup, close **all five apps and the launcher**, then copy the
+whole production-logs directory (including clock.sqlite3) to backup storage.
+When taking live backups, use SQLite's backup API per file, retaining a clock
+backup at least as new as all backed-up events; do not copy open database files
+individually. Keep sufficient free space and back up this directory regularly.
+
+Development checks (all use temporary log data and no camera/PLC):
+
+```sh
+scripts/test-production-logs.sh
+launcher/.venv/bin/python -m unittest discover -s launcher/tests -v
+```

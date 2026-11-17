@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from launcher.processes import AlreadyRunning, ProcessManager
 
@@ -25,6 +26,9 @@ class ProcessTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        self.production_env = patch.dict(os.environ, OCR_PRODUCTION_LOG_DIR=str(self.root / 'production'))
+        self.production_env.start()
+        self.addCleanup(self.production_env.stop)
         self.manager = ProcessManager(self.root / 'state')
         self.script = self.root / 'worker.py'
         self.script.write_text('''import json, os, sys, time

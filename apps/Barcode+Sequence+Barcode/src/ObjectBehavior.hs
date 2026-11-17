@@ -23,6 +23,8 @@ module ObjectBehavior (
    combineAll
 ) where
 
+import qualified ProductionLog as PL
+
 import           FRP.Yampa
 import           Object
 import           Parser
@@ -462,7 +464,14 @@ overLord' g sg = proc oi -> do
                              serStart marker, serEnd marker)) seq
                           decision = maybe (ProductionRejected "无效的双条码检测结果")
                             (decideBarcodePair productEnabled packagingEnabled expected) inspection
+                          logVerdict passed reason = PL.recordProduction $ (PL.productionEvent "Barcode+Sequence+Barcode" passed)
+                            { PL.eventBarcode = curSerial
+                            , PL.eventPackagingBarcode = maybe "" (barcodeDecoded . packagingBarcode) inspection
+                            , PL.eventGuard = Just productEnabled, PL.eventReverse = Just b11
+                            , PL.eventPackagingGuard = Just packagingEnabled
+                            , PL.eventReason = reason }
                           reject reason = do
+                            logVerdict False reason
                             ocrState $=! OcrFail
                             modifyIORef' ng (+1)
                             modbusNg
@@ -472,6 +481,7 @@ overLord' g sg = proc oi -> do
                         SequenceUnconfigured -> return ()
                         SequenceMismatched -> reject "产品条码顺号不连续"
                         SequenceMatched -> do
+                          logVerdict True "双条码检测通过"
                           case seq of
                             Just marker -> refSeq $=! Just (marker {serBody = serBody marker + (if b11 then -1 else 1)})
                             Nothing -> return ()
