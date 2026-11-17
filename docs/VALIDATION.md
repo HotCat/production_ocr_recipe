@@ -74,3 +74,41 @@ PaddleOCR installation. The tested Python package inventory is preserved in
 `services/paddleocr_service/requirements-tested.txt`; its virtual environment
 and models are deliberately external. Camera capture, physical machine cycles,
 USB permissions and target display behavior require hardware validation.
+
+## Launcher and shared service updates, 2026-11-17
+
+The follow-up change adds the configuration-driven PySide6 launcher, per-client
+Modbus environment settings and a repository-local shared OCR runtime. See
+`launcher/README.md` and `OCR_SERVICE_MIGRATION.md` for setup and interfaces.
+
+- All 17 launcher tests pass with Ubuntu Python 3.12.3 and PySide6 6.12.0,
+  including actual X11 initialization through `scripts/run-launcher.sh`.
+  Ubuntu's interpreter avoids the Conda X11/XKB library conflict reproduced
+  during `QApplication` initialization. The installer recreates an environment
+  whose base interpreter differs from the configured system interpreter.
+- Process tests cover atomic duplicate rejection across launcher processes,
+  restart/reconnection, inherited locking after monitor death, independent
+  applications, startup failure and abnormal exit. No production machine is
+  operated by these tests.
+- Inspector tests cover per-program persistence, validation, externally edited
+  configuration, dynamic parameter types, configured camera choices and
+  disabling launch while an instance runs. Program availability has no UI
+  add/remove controls. Camera defaults include `Hikvision` and `MV-SUA131GC#0`.
+- All four shared service unittest groups and the packaging launcher unittest
+  pass. The migrated service passed real Chinese OCR and simultaneous clients,
+  including with the old checkout hidden. A compiled Haskell client passed
+  against the migrated production endpoint. Runtime models/environments remain
+  ignored and are not part of this source commit.
+- The three barcode clients rebuilt with configurable Modbus host/port/slave
+  settings. Their actual Haskell/C++ modules passed loopback checks using
+  `scripts/test-launcher-modbus.sh`, without accessing a camera or real PLC.
+- The dual-barcode client rebuilt again after removing the Canny header and
+  controls from its parameter panel. Existing processing/configuration support
+  was retained; this change removes the operator-facing panel.
+- Source audit, Python/shell syntax checks and Git whitespace checks passed.
+  Local runtime paths, virtual environments, model weights, generated binaries
+  and user settings are excluded from the source commit.
+
+The desktop shortcut is a user installation artifact. Its reproducible setup
+commands are documented in `launcher/README.md`; its absolute workstation path
+is not committed as a portable desktop entry.

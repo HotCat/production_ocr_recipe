@@ -28,6 +28,9 @@ instead and set `PADDLEOCR_DEVICE=gpu:0`.
 
 Models are prepared/downloaded separately and are excluded from Git. `run.sh`
 sets `PADDLE_PDX_CACHE_HOME` to the service's `.cache` directory unless supplied.
+`run.sh` detects a complete local set of the five tested models under
+`.cache/official_models` and passes their directories explicitly, skipping
+remote model-host checks. `PADDLEOCR_MODEL_ROOT` can override this directory.
 CPU inference disables the current PaddleX oneDNN default; compatible hosts can
 set `PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=True`.
 
@@ -42,14 +45,19 @@ High-water marks are eight messages per peer, with backpressure under load.
 
 ```sh
 scripts/install-ocr-user-service.sh
-systemctl --user enable --now production-paddleocr.service
-journalctl --user -u production-paddleocr.service -f
+systemctl --user enable --now paddleocr.service
+journalctl --user -u paddleocr.service -f
 ```
 
-The installer writes paths for this clone and reloads systemd. It does not start
-the service itself. Ensure no existing service owns the endpoint before enabling.
+The installer writes paths for this clone, backs up a changed existing unit
+under `~/.local/state/production-ocr-service/unit-backups`, and reloads systemd.
+It does not start or restart the service itself. For an already running unit,
+apply changes with `systemctl --user restart paddleocr.service`. Ensure no other
+service owns the endpoint before enabling a new instance. The optional argument
+`production-paddleocr.service` retains support for that alternative unit name;
+run only one of the two units on a given endpoint.
 The unit starts at login. Use `systemctl --user disable --now
-production-paddleocr.service` to stop and disable it. For system-wide deployment,
+paddleocr.service` to stop and disable it. For system-wide deployment,
 the separate OCR Debian package is retained in
 `apps/Engraving+Sequence/packaging`; see its README.
 
@@ -68,3 +76,18 @@ Tests exercise transport, response normalization and independent concurrent
 clients. They verify responses remain paired and the maximum concurrent engine
 call count is one, without loading real models. Application test helpers accept
 `--real` to additionally use an already running PaddleOCR endpoint.
+
+## Workstation migration, 2026-11-17
+
+The active, enabled `paddleocr.service` now uses this repository's service
+directory, `.venv` and `.cache/official_models`. The previous application checkout
+is no longer a runtime dependency. Python 3.13.5 still uses the separately
+installed base interpreter under `~/anaconda3`; the camera application SDKs
+remain separate installations as documented in the build guide.
+
+The environment was copied and its entry points relocated; all 99 model files
+matched their source hashes. Imports, `pip check` and four transport/concurrency
+unittest groups passed. A real test service also ran with the entire old
+application hidden in a private mount namespace. Chinese OCR and two concurrent
+clients passed there and again on the switched production endpoint. The old
+copy was retained as a backup. See [migration details](../../docs/OCR_SERVICE_MIGRATION.md).

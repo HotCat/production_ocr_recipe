@@ -46,7 +46,7 @@ import Text.RawString.QQ
 
 C.context openCvCtx
 
-C.include "<stdlib.h>"
+C.include "<cstdlib>"
 
 C.include "modbus.h"
 C.include "iostream"
@@ -56,7 +56,16 @@ C.include "<stdexcept>"
 C.include "Barcode/BarcodeRecog.cpp"
 
 C.verbatim [r|
-   modbus mb = modbus("192.168.0.68", 4998);
+   static int modbusSetting(const char* name, int fallback, int maximum) {
+     const char* value = std::getenv(name);
+     if (!value || !*value) return fallback;
+     char* end = nullptr;
+     long parsed = std::strtol(value, &end, 10);
+     return (*end == '\0' && parsed > 0 && parsed <= maximum) ? parsed : fallback;
+   }
+   modbus mb = modbus(std::getenv("BARCODE_SEQUENCE_MODBUS_HOST") ?
+     std::getenv("BARCODE_SEQUENCE_MODBUS_HOST") : "192.168.0.68",
+     modbusSetting("BARCODE_SEQUENCE_MODBUS_PORT", 4998, 65535));
 |]
 
 
@@ -64,7 +73,7 @@ modbusInit :: IO ()
 modbusInit = do
  [CU.block| void {
    // set slave id
-   mb.modbus_set_slave_id(3);
+   mb.modbus_set_slave_id(modbusSetting("BARCODE_SEQUENCE_MODBUS_SLAVE", 3, 247));
    // connect with the server
    mb.modbus_connect();
  }|]

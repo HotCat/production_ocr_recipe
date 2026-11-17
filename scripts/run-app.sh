@@ -28,6 +28,19 @@ for profile in fun my config1 config2 config3; do
     (set -C; cat "$app_dir/src/$profile.scm" > "$config_dir/$profile.scm")
   fi
 done
-export LD_LIBRARY_PATH="$repo_dir/build/native/fpp:$repo_dir/build/native/reconstruct${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+local_library_dirs=
+if [ -f "$app_dir/runtime-libraries.local.json" ]; then
+  local_library_dirs=$(python3 - "$app_dir/runtime-libraries.local.json" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
+paths = json.loads(Path(sys.argv[1]).read_text())
+if not isinstance(paths, list) or any(not isinstance(p, str) or not p or ':' in p or '\n' in p for p in paths):
+    raise SystemExit('Invalid runtime-libraries.local.json; regenerate with scripts/configure-local.py')
+print(':'.join(paths))
+PYTHON
+  )
+fi
+export LD_LIBRARY_PATH="$repo_dir/build/native/fpp:$repo_dir/build/native/reconstruct${local_library_dirs:+:$local_library_dirs}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cd "$app_dir"
 exec ./bin/Camera "$@"

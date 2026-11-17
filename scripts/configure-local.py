@@ -26,4 +26,5 @@ for app in (root / 'apps').iterdir():
         if paths:
             text += '\n' + key + ':\n' + ''.join('- ' + json.dumps(str(p.resolve())) + '\n' for p in paths)
     (app / 'stack.local.yaml').write_text(text)
-    print(app.name + ': wrote stack.local.yaml')
+    (app / 'runtime-libraries.local.json').write_text(json.dumps([str(p.resolve()) for p in args.library_dir], indent=2) + '\n')
+    print(app.name + ': wrote stack.local.yaml and runtime-libraries.local.json')

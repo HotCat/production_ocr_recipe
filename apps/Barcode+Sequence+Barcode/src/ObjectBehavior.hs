@@ -1147,30 +1147,6 @@ opencvCanny' sg = proc oi -> do
   oe' <- iPre noEvent -< oe
 
   returnA -< ((\env ctrlMaps fontSet src -> do
-                  let FontSet{..} = fontSet
-                  pushFont msyhlFont
-                  result <- collapsingHeader "视觉处理<Canny>"
-                  popFont
-
-                  pushFont droidFont
-                  when result $ do
-                    ctrlMaps' <- get ctrlMaps
-                    let (Just (DragHub1 thres1)) = Map.lookup "opencv-canny-threshold1" ctrlMaps'
-                        (Just (DragHub1 thres2)) = Map.lookup "opencv-canny-threshold2" ctrlMaps'
-                        (Just (PinHub1 enable)) = Map.lookup "opencv-canny-enable" ctrlMaps'
-                    dragFloat "Threshold1" thres1 1.0 1.0 300.0
-                    sameLine
-                    showHelp msyhlFont "canny算法的第一个参数"
-                    dragFloat "Threshold2" thres2 1.0 1.0 300.0
-                    sameLine
-                    showHelp msyhlFont "canny算法的第二个参数"
-
-                    checkbox "Enable" enable
-                    sameLine
-                    showHelp msyhlFont "是否开启canny算法，主要在调试工装光线的时候临时使用"
-                    return ()
-
-                  popFont
                   return $ do
                     if b20 then
                       exceptError $ cvtColor rgb gray src >>= canny (realToFrac b10) (realToFrac b11) Nothing CannyNormL1 >>= cvtColor gray rgb

@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "cameras": [
+    "Hikvision",
+    "MV-SUA131GC#0"
+  ],
+  "parameters": {
+    "camera": {
+      "label": "相机名称",
+      "type": "choice",
+      "choices_from": "cameras",
+      "default": "Hikvision"
+    },
+    "modbus_host": {
+      "label": "Modbus IP 地址",
+      "type": "string",
+      "format": "ipv4",
+      "default": "192.168.0.68"
+    },
+    "modbus_port": {
+      "label": "Modbus 端口",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 4998
+    }
+  },
+  "programs": [
+    {
+      "id": "Barcode+Sequence",
+      "instance_key": "Barcode+Sequence",
+      "name": "条码 + 序列号",
+      "command": [
+        "{repo}/scripts/run-app.sh",
+        "Barcode+Sequence"
+      ],
+      "cwd": "{repo}",
+      "parameters": {
+        "camera": "SEQUENCE_OCR_CAMERA",
+        "modbus_host": "BARCODE_SEQUENCE_MODBUS_HOST",
+        "modbus_port": "BARCODE_SEQUENCE_MODBUS_PORT"
+      },
+      "values": {
+        "camera": "Hikvision",
+        "modbus_host": "192.168.0.68",
+        "modbus_port": 4998
+      },
+      "environment": {}
+    },
+    {
+      "id": "Barcode+Sequence+Barcode",
+      "instance_key": "Barcode+Sequence+Barcode",
+      "name": "双条码 + 序列号",
+      "command": [
+        "{repo}/scripts/run-app.sh",
+        "Barcode+Sequence+Barcode"
+      ],
+      "cwd": "{repo}",
+      "parameters": {
+        "camera": "DOUBLE_BARCODE_CAMERA",
+        "modbus_host": "DOUBLE_BARCODE_MODBUS_HOST",
+        "modbus_port": "DOUBLE_BARCODE_MODBUS_PORT"
+      },
+      "values": {
+        "camera": "Hikvision",
+        "modbus_host": "192.168.0.68",
+        "modbus_port": 4998
+      },
+      "environment": {}
+    },
+    {
+      "id": "Barcode+Sequence+Engraving",
+      "instance_key": "Barcode+Sequence+Engraving",
+      "name": "条码 + 序列号 + 刻字",
+      "command": [
+        "{repo}/scripts/run-app.sh",
+        "Barcode+Sequence+Engraving"
+      ],
+      "cwd": "{repo}",
+      "parameters": {
+        "camera": "BARCODE_ENGRAVING_CAMERA",
+        "modbus_host": "BARCODE_ENGRAVING_MODBUS_HOST",
+        "modbus_port": "BARCODE_ENGRAVING_MODBUS_PORT"
+      },
+      "values": {
+        "camera": "Hikvision",
+        "modbus_host": "192.168.0.68",
+        "modbus_port": 4998
+      },
+      "environment": {}
+    },
+    {
+      "id": "Engraving+Sequence",
+      "instance_key": "Engraving+Sequence",
+      "name": "刻字 + 序列号",
+      "command": [
+        "{repo}/scripts/run-app.sh",
+        "Engraving+Sequence"
+      ],
+      "cwd": "{repo}",
+      "parameters": {
+        "camera": "SEQUENCE_CAMERA",
+        "modbus_host": "SEQUENCE_MODBUS_HOST",
+        "modbus_port": "SEQUENCE_MODBUS_PORT"
+      },
+      "values": {
+        "camera": "Hikvision",
+        "modbus_host": "192.168.0.68",
+        "modbus_port": 4998
+      },
+      "environment": {}
+    },
+    {
+      "id": "Engraving+Compare",
+      "instance_key": "Engraving+Compare",
+      "name": "刻字与预设文字比对",
+      "command": [
+        "{repo}/scripts/run-app.sh",
+        "Engraving+Compare"
+      ],
+      "cwd": "{repo}",
+      "parameters": {
+        "camera": "ENGRAVING_COMPARE_CAMERA",
+        "modbus_host": "ENGRAVING_COMPARE_MODBUS_HOST",
+        "modbus_port": "ENGRAVING_COMPARE_MODBUS_PORT"
+      },
+      "values": {
+        "camera": "Hikvision",
+        "modbus_host": "192.168.0.68",
+        "modbus_port": 4998
+      },
+      "environment": {}
+    }
+  ]
+}

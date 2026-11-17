@@ -52,7 +52,8 @@ source builds `FFPLibrary` and `reconstruct` from the imported sources.
 
 Use `scripts/configure-local.py --library-dir DIR --include-dir DIR` for
 additional vendor paths (repeat arguments for multiple directories). This
-creates ignored `stack.local.yaml` files. The build helper selects them when
+creates ignored `stack.local.yaml` files and `runtime-libraries.local.json`
+files used by `scripts/run-app.sh` when started from the desktop. The build helper selects them when
 present. For direct Stack commands/tests, export
 `STACK_YAML="$PWD/stack.local.yaml"` in the application directory, or use
 `scripts/test-app.sh` which does this automatically. Add external vendor

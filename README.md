@@ -73,6 +73,22 @@ The customized Husk exports 3D/projector/motion APIs and consequently still
 links their native libraries. Their required source is included even though
 the OCR workflows only use part of that API. See [dependencies/README.md](dependencies/README.md).
 
+## Operator launcher
+
+The PySide6 launcher provides a program list, a camera/Modbus parameter inspector,
+status tracking and one managed instance per program. Program availability is
+managed entirely through its JSON configuration; the UI has no add/remove
+controls. Parameters can be extended through configuration definitions.
+
+```sh
+scripts/install-launcher.sh
+scripts/run-launcher.sh
+```
+
+The user configuration is `~/.config/production-ocr-launcher/config.json`.
+See [launcher/README.md](launcher/README.md) for program entries, parameter
+bindings, process lifetime and desktop installation.
+
 ## Shared PaddleOCR
 
 Use an existing compatible service by setting `PADDLEOCR_ENDPOINT`, or create a
@@ -91,8 +107,10 @@ scripts/run-app.sh 'Engraving+Compare'
 calibration, sets the working directory for assets and finds the built native
 libraries. Preserve vendor library search paths in `LD_LIBRARY_PATH` if your
 SDKs were installed outside the system linker search directories. On this
-workstation another user service already owns port 5555; use that existing
-service or choose a different endpoint instead of starting a second listener.
+workstation `paddleocr.service` runs from `services/paddleocr_service` in this
+repository and owns port 5555. Use that existing service; do not start a second
+listener on the same endpoint. Its environment and all five models have been
+migrated here, so the old application checkout is no longer required by OCR.
 
 ## Verification
 
