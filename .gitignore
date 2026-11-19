@@ -49,3 +49,7 @@ runtime-libraries.local.json
 *.sqlite3-journal
 *.sqlite3-wal
 *.sqlite3-shm
+
+# Keep the shared camera wrapper source; the executable-name rule also matches
+# this directory. SDKs remain external and generated binaries stay ignored.
+!dependencies/husk-scheme/hs-src/Device/Camera/

@@ -62,13 +62,15 @@ scripts/run-launcher.sh --config /path/to/site.json --repo /path/to/production_o
 scripts/run-launcher.sh --config /path/to/site.json --check-config
 ```
 
-Edit the `programs` array to add/remove/reorder entries. Change `cameras` to the
-exact strings accepted by the camera selector (initially `Hikvision`). This
-Default candidates are `Hikvision` and `MV-SUA131GC#0`; each program initially
-selects `Hikvision`. The list is configured, not discovered from hardware. Existing selector semantics
-are preserved; adding an arbitrary label does not implement a new camera
-backend. Each program has its own `values`, so selecting another program does
-not overwrite its camera or Modbus address. Click **保存参数** to persist edits;
+Edit the `programs` array to add/remove/reorder entries. Default `cameras`
+candidates are `Hikvision`, `MV-SUA131GC#0` and `MV-GE502M-T`; each program initially selects
+`Hikvision`. This selects the unique Hikvision/Hikrobot camera, ignoring MVS
+entries belonging to other manufacturers such as MindVision. For multiple
+Hikvision cameras, add `Hikvision:SERIAL` candidates using the exact MVS serial
+numbers, reload configuration and select the desired camera in the inspector.
+The list is configured, not discovered from hardware. Adding an arbitrary label
+does not implement a new camera backend. See [camera selection](../docs/CAMERA_SELECTION.md).
+Each program has its own `values`, so selecting another program does not overwrite its camera or Modbus address. Click **保存参数** to persist edits;
 **启动程序** also saves before launching. Invalid IPv4 addresses or port ranges
 block saving/launching. Changes affect the next launch.
 

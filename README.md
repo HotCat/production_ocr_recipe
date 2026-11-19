@@ -13,8 +13,11 @@ excluded from Git.
 | `Engraving+Sequence` | Engraved serial continuity | `SEQUENCE_CAMERA` |
 | `Engraving+Compare` | Mixed Chinese/English engraving equals a saved preset; no sequence mechanism | `ENGRAVING_COMPARE_CAMERA` |
 
-Camera defaults are `Hikvision`. Each application keeps its existing production
-workflow and calibration namespace. `Engraving+Compare` includes immediate preset
+Camera defaults are `Hikvision`. This selects the unique Hikvision/Hikrobot
+USB3 or GigE device by manufacturer, ignoring third-party MVS entries. To select
+one of multiple Hikvision cameras, use `Hikvision:SERIAL`. See
+[docs/CAMERA_SELECTION.md](docs/CAMERA_SELECTION.md). Each application keeps its
+existing production workflow and calibration namespace. `Engraving+Compare` includes immediate preset
 persistence and restores the last saved profile on startup. Its whole-text rule
 ignores whitespace and treats `：`/`:` equally; case and other punctuation matter.
 

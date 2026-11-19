@@ -112,3 +112,28 @@ Modbus environment settings and a repository-local shared OCR runtime. See
 The desktop shortcut is a user installation artifact. Its reproducible setup
 commands are documented in `launcher/README.md`; its absolute workstation path
 is not committed as a portable desktop entry.
+
+## Mixed-vendor Hikvision selection, 2026-11-19
+
+- `scripts/test-camera-selection.sh` passed 21 hardware-free constructor tests.
+  The actual Hikvision Camera.cpp runs against fake MVS entry points using the
+  installed SDK headers and OpenCV. MindVision GigE before Hikvision USB3 and the
+  reverse ordering both select the correct Hikvision descriptor. Other-vendor,
+  missing, ambiguous, duplicate-serial and enumeration-error cases never create
+  a camera handle. USB vendor identity, Hikvision GigE, explicit serial selectors,
+  null entries and unterminated SDK fields are covered.
+- `scripts/build-all.sh` rebuilt and copied all five application binaries.
+  Every binary contains the new selection diagnostics, and `ldd` resolves all
+  native dependencies with each application's configured runtime library paths.
+- The Scheme initialization error now retains the underlying camera diagnostic.
+  The selection policy header is a tracked compile dependency of the shared
+  Haskell binding. The executable-name ignore rule no longer hides the camera
+  wrapper source directory; object files and shared libraries remain ignored.
+- Source audit, shell syntax and Git whitespace checks pass. Tests did not open
+  cameras, acquire images, launch production GUI clients, or operate a PLC.
+
+Physical acceptance with both cameras connected remains necessary. Follow
+[CAMERA_SELECTION.md](CAMERA_SELECTION.md): retain the `Hikvision` setting and
+confirm the selected USB3 serial in 运行日志, then check the live image after
+restarting the application. No application camera/profile configuration was
+changed by this fix.

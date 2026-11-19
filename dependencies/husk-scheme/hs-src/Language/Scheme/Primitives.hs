@@ -285,7 +285,7 @@ initCamera [String s] = do
     "Hik" -> do
       v <- liftIO $ runExceptT $ hv_init s
       case v of
-        Left _ -> throwError $ InternalError "hv_init failed"
+        Left failure -> throwError $ InternalError ("hv_init failed: " ++ show failure)
         Right camera -> return $ CameraDataH camera
 
     "Vir" -> do

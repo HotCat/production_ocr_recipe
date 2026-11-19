@@ -2,7 +2,8 @@
   "schema_version": 1,
   "cameras": [
     "Hikvision",
-    "MV-SUA131GC#0"
+    "MV-SUA131GC#0",
+    "MV-GE502M-T"
   ],
   "parameters": {
     "camera": {
