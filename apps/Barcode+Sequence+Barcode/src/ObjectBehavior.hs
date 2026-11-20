@@ -24,6 +24,7 @@ module ObjectBehavior (
 ) where
 
 import qualified ProductionLog as PL
+import qualified ProductionDebug as PD
 
 import           FRP.Yampa
 import           Object
@@ -478,7 +479,7 @@ overLord' g sg = proc oi -> do
                             atomically $ writeTChan collect_batch ("NG " ++ reason ++ " 条码=" ++ show curSerial ++ "\n")
                       case decision of
                         ProductionRejected reason -> reject reason
-                        SequenceUnconfigured -> return ()
+                        SequenceUnconfigured -> PD.finishDebugTrigger
                         SequenceMismatched -> reject "产品条码顺号不连续"
                         SequenceMatched -> do
                           logVerdict True "双条码检测通过"
@@ -759,6 +760,20 @@ saveConfig' sg = proc oi -> do
                   let FontSet{..} = fontSet
                   pushFont msyhlFont
                   clicked <- button "保存参数"
+                  when PD.debugMode $ do
+                    sameLine
+                    debugClicked <- button "触发modbus"
+                    when debugClicked $ do
+                      debugControls <- get ctrlMaps
+                      let (Just (ChanHub2 debugMessages)) = Map.lookup "barcode-ocr-collect-batch" debugControls
+                      let (Just (CompHub1 markerRef)) = Map.lookup "serial-number-sequence-marker" debugControls
+                      marker <- get markerRef
+                      if isJust marker then do
+                        accepted <- PD.requestDebugTrigger
+                        atomically $ writeTChan debugMessages $
+                          if accepted then "[调试] 已提交模拟Modbus触发，执行完整生产检测\n"
+                                      else "[调试] 上一次检测尚未结束，请等待结果后重试\n"
+                      else atomically $ writeTChan debugMessages "[调试] 请先设置起始号及顺号区域，再触发检测\n"
                   sameLine
                   showHelp msyhlFont "保存当前配置的所有参数，如果临时调整了参数，想进行快速还原，可以按x键"
                   when clicked $ do
@@ -867,6 +882,7 @@ barcodeOCR' runtime sg = proc oi -> do
                         writeTChan packagingLog ("[包装] " ++ formatBarcodeResult (packagingBarcode inspection))
                       if barcodeGuardEnabled (productBarcode inspection) /= guardEnabled ||
                          barcodeGuardEnabled (packagingBarcode inspection) /= packagingEnabled then do
+                        PD.finishDebugTrigger
                         resetBarcodePair runtime
                         atomically $ writeTChan collect_batch "[结果已丢弃] 双条码印字校验设置已改变，重新检测\n"
                       else do
@@ -891,17 +907,23 @@ barcodeOCR' runtime sg = proc oi -> do
 
                   let subRect = toRect $ HRect (V2 ((round x)+(round b40)) ((round y)+(round b41))) (V2 (round (w/b10)) (round (h/b10)))
                       r = runExcept $ cvtColor rgb bgr (matFlip src FlipVertically) >>= (flip matSubRect) subRect >>= (\img-> return $ matFlip (matTranspose img) FlipVertically) >>= cvtColor bgr rgb >>= resize (ResizeRel $ pure (realToFrac b11)) InterLinear
+                  triggered <- modbusTriggered
+                  when (PD.debugMode && triggered) $ do
+                    queued <- queueDebugBarcodePairWith inspectBarcode runtime guardEnabled packagingEnabled
+                      (either (const (Left "产品条码识别区域无效，请重新选择")) Right r) packagingImage
+                    unless queued $ do
+                      PD.finishDebugTrigger
+                      atomically $ writeTChan collect_batch "[调试] 双条码检测尚未结束，请等待结果后重试\n"
                   case r of
                     Left _ -> do
                       tr $=! Nothing
-                      queueBarcodePairWith inspectBarcode runtime guardEnabled packagingEnabled False "ng" src packagingImage
+                      unless PD.debugMode $ queueBarcodePairWith inspectBarcode runtime guardEnabled packagingEnabled False "ng" src packagingImage
                     Right labelImage -> do
                       -- Decode only for the live range-selection preview. The
                       -- asynchronous inspection is the production authority.
                       decoded <- decodeBarcode labelImage
                       tr $=! (if decoded == "ng" then Nothing else Just decoded)
-                      triggered <- modbusTriggered
-                      queueBarcodePairWith inspectBarcode runtime guardEnabled packagingEnabled triggered decoded labelImage packagingImage
+                      unless PD.debugMode $ queueBarcodePairWith inspectBarcode runtime guardEnabled packagingEnabled triggered decoded labelImage packagingImage
 
                   when (isEvent b21') $ do
                       let subRect = toRect $ HRect (V2 ((round x)+(round b40)) ((round y)+(round b41))) (V2 (round (w/b10)) (round (h/b10)))

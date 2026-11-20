@@ -17,5 +17,6 @@ CREATE TABLE IF NOT EXISTS production_events (
  integrity_guard INTEGER CHECK(integrity_guard IN (0,1)),
  reverse INTEGER CHECK(reverse IN (0,1)),
  packaging_integrity_guard INTEGER CHECK(packaging_integrity_guard IN (0,1)),
+ debug_mode INTEGER NOT NULL DEFAULT 0 CHECK(debug_mode IN (0,1)),
  reason TEXT NOT NULL DEFAULT ''
 )

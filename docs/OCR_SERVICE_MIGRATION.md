@@ -13,8 +13,11 @@ Completed on 2026-11-17 (Asia/Shanghai). The canonical runtime is now:
 The existing user unit `paddleocr.service` remains enabled, using this
 repository as its working directory. The endpoint is unchanged at
 `tcp://127.0.0.1:5555`; the launcher and five clients need no endpoint edits.
-There is one shared model pipeline and requests are still processed serially.
-No second permanent OCR service was created.
+At migration time there was one shared model pipeline with serial processing;
+no second permanent OCR service was created. On 2026-11-20 the same service
+was extended to two independent CPU model workers (hard maximum two concurrent
+inferences). See the [current service instructions](../services/paddleocr_service/README.md)
+for worker/thread settings and validation.
 
 ```sh
 systemctl --user status paddleocr.service

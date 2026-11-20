@@ -43,6 +43,16 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(response)["text"], "A123BC45")
 
+    def test_engine_passes_thread_and_device_settings(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from services.paddleocr_service.server import PaddleEngine
+        constructor = Mock()
+        with patch.dict('sys.modules', {'paddleocr': SimpleNamespace(PaddleOCR=constructor)}):
+            with patch.dict('os.environ', {'PADDLEOCR_MODEL_ROOT': ''}):
+                PaddleEngine('en', 'cpu', 2)
+        constructor.assert_called_once_with(lang='en', device='cpu', cpu_threads=2)
+
 # Each client process owns its socket. The production server loop is used unchanged.
 def _concurrent_client(endpoint, marker, barrier, results):
     import cv2
@@ -149,6 +159,214 @@ class ConcurrentServiceTests(unittest.TestCase):
             stop.set()
             worker.join(timeout=5)
             context.term()
+
+
+# Picklable fake pipeline: these tests exercise the production spawn/broker path.
+class PoolEngine:
+    def __init__(self, state, lang, device, cpu_threads):
+        import os
+        self.state = state
+        self.pid = os.getpid()
+        state['events'].put(('ready', self.pid, lang, device, cpu_threads))
+        if state.get('fail_init'):
+            raise RuntimeError('test initialization failure')
+
+    def recognize(self, image):
+        import os
+        marker = int(image[0, 0, 0])
+        with self.state['lock']:
+            self.state['active'].value += 1
+            self.state['maximum'].value = max(self.state['maximum'].value,
+                                              self.state['active'].value)
+        self.state['events'].put(('start', marker, self.pid))
+        try:
+            if marker == 250:
+                os._exit(23)
+            if marker == 249:
+                raise RuntimeError('test inference failure')
+            gate = self.state.get('gates', {}).get(marker)
+            if gate is not None and not gate.wait(10):
+                raise TimeoutError('test gate was not released')
+            return {'text': str(marker), 'lines': []}
+        finally:
+            with self.state['lock']:
+                self.state['active'].value -= 1
+
+
+def pool_request(endpoint, marker=None, operation='recognize'):
+    import cv2
+    import zmq
+    context = zmq.Context()
+    try:
+        with context.socket(zmq.REQ) as socket:
+            socket.setsockopt(zmq.LINGER, 0)
+            socket.setsockopt(zmq.RCVTIMEO, 10000)
+            socket.connect(endpoint)
+            frames = [json.dumps({'op': operation}).encode()]
+            if marker is not None:
+                ok, png = cv2.imencode('.png', np.full((8, 8, 3), marker, np.uint8))
+                assert ok
+                frames.append(png.tobytes())
+            socket.send_multipart(frames)
+            return socket.recv_string()
+    finally:
+        context.term()
+
+
+class WorkerPoolTests(unittest.TestCase):
+    def setUp(self):
+        import multiprocessing
+        import queue
+        import threading
+        self.spawn = multiprocessing.get_context('spawn')
+        self.state = {'lock': self.spawn.Lock(), 'active': self.spawn.Value('i', 0),
+                      'maximum': self.spawn.Value('i', 0), 'events': self.spawn.Queue()}
+        self.ready = queue.Queue()
+        self.stop = threading.Event()
+        self.errors = []
+        self.thread = None
+        self.pids = []
+
+    def start_pool(self, workers=2, **options):
+        import functools
+        import threading
+        from services.paddleocr_service.server import serve
+
+        def run():
+            try:
+                serve('tcp://127.0.0.1:*', 'en', 'cpu', workers, 2,
+                      stop=self.stop, ready=self.ready,
+                      engine_factory=functools.partial(PoolEngine, self.state), **options)
+            except Exception as exc:
+                self.errors.append(exc)
+        self.thread = threading.Thread(target=run)
+        self.thread.start()
+        endpoint = self.ready.get(timeout=10)
+        for _ in range(workers):
+            event = self.state['events'].get(timeout=5)
+            self.assertEqual(event[0], 'ready')
+            self.assertEqual(event[2:], ('en', 'cpu', 2))
+            self.pids.append(event[1])
+        self.assertEqual(len(set(self.pids)), workers)
+        return endpoint
+
+    def tearDown(self):
+        import os
+        self.stop.set()
+        for gate in self.state.get('gates', {}).values():
+            gate.set()
+        if self.thread is not None:
+            self.thread.join(timeout=12)
+            self.assertFalse(self.thread.is_alive(), 'pool did not shut down')
+        for pid in self.pids:
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+        self.state['events'].close()
+        self.state['events'].join_thread()
+
+    def test_three_clients_two_workers_out_of_order_and_queued_third(self):
+        import concurrent.futures
+        import queue
+        self.state['gates'] = {marker: self.spawn.Event() for marker in (31, 97, 207)}
+        endpoint = self.start_pool()
+        with concurrent.futures.ThreadPoolExecutor(3) as clients:
+            pending = {marker: clients.submit(pool_request, endpoint, marker)
+                       for marker in (31, 97, 207)}
+            try:
+                first = self.state['events'].get(timeout=5)
+                second = self.state['events'].get(timeout=5)
+                self.assertEqual(first[0], 'start')
+                self.assertEqual(second[0], 'start')
+                self.assertNotEqual(first[2], second[2])
+                with self.assertRaises(queue.Empty):
+                    self.state['events'].get(timeout=0.2)
+                # Finish the second request first. The queued third request must
+                # use its newly idle worker while the first remains in flight.
+                self.state['gates'][second[1]].set()
+                self.assertEqual(pending[second[1]].result(timeout=5), str(second[1]))
+                third = self.state['events'].get(timeout=5)
+                self.assertEqual(third[0], 'start')
+                self.assertEqual(third[2], second[2])
+                self.assertFalse(pending[first[1]].done())
+                self.state['gates'][third[1]].set()
+                self.assertEqual(pending[third[1]].result(timeout=5), str(third[1]))
+                self.state['gates'][first[1]].set()
+                self.assertEqual(pending[first[1]].result(timeout=5), str(first[1]))
+            finally:
+                for gate in self.state['gates'].values():
+                    gate.set()
+        self.assertEqual(self.state['maximum'].value, 2)
+        self.assertFalse(self.errors)
+
+    def test_single_worker_and_error_recovery(self):
+        endpoint = self.start_pool(workers=1)
+        self.assertIn('test inference failure', pool_request(endpoint, 249))
+        self.assertTrue(pool_request(endpoint, operation='unsupported').startswith('ERROR:'))
+        self.assertTrue(pool_request(endpoint, operation='recognize').startswith('ERROR:'))
+        self.assertEqual(pool_request(endpoint, 31), '31')
+        self.assertEqual(json.loads(pool_request(endpoint, 97, 'recognize_json')),
+                         {'text': '97', 'lines': []})
+        self.assertEqual(json.loads(pool_request(endpoint, operation='health')),
+                         {'ok': True, 'service': 'paddleocr'})
+        self.assertEqual(self.state['maximum'].value, 1)
+        self.assertFalse(self.errors)
+
+    def test_abandoned_client_does_not_block_others(self):
+        import cv2
+        import zmq
+        self.state['gates'] = {31: self.spawn.Event()}
+        endpoint = self.start_pool()
+        with zmq.Context() as context:
+            with context.socket(zmq.REQ) as client:
+                client.setsockopt(zmq.LINGER, 0)
+                client.connect(endpoint)
+                _, png = cv2.imencode('.png', np.full((8, 8, 3), 31, np.uint8))
+                client.send_multipart([b'{"op":"recognize"}', png.tobytes()])
+                self.assertEqual(self.state['events'].get(timeout=5)[1], 31)
+            self.assertEqual(pool_request(endpoint, 207), '207')
+            self.state['gates'][31].set()
+            self.assertTrue(json.loads(pool_request(endpoint, operation='health'))['ok'])
+        self.assertFalse(self.errors)
+
+    def test_worker_crash_fails_pool_and_cleans_children(self):
+        endpoint = self.start_pool()
+        self.assertTrue(pool_request(endpoint, 250).startswith('ERROR: OCR service is stopping'))
+        self.thread.join(timeout=10)
+        self.assertFalse(self.thread.is_alive())
+        self.assertEqual(len(self.errors), 1)
+        self.assertIn('exited (23)', str(self.errors[0]))
+
+    def test_initialization_failure_cleans_children(self):
+        import functools
+        import threading
+        from services.paddleocr_service.server import serve
+        self.state['fail_init'] = True
+
+        def run():
+            try:
+                serve('tcp://127.0.0.1:*', 'en', stop=self.stop,
+                      engine_factory=functools.partial(PoolEngine, self.state))
+            except Exception as exc:
+                self.errors.append(exc)
+        self.thread = threading.Thread(target=run)
+        self.thread.start()
+        for _ in range(2):
+            self.pids.append(self.state['events'].get(timeout=10)[1])
+        self.thread.join(timeout=10)
+        self.assertFalse(self.thread.is_alive())
+        self.assertEqual(len(self.errors), 1)
+        self.assertIn('exited (1)', str(self.errors[0]))
+
+    def test_invalid_limits_and_bind_conflict_do_not_start_workers(self):
+        import zmq
+        from services.paddleocr_service.server import serve
+        for options in ({'workers': 0}, {'workers': 3}, {'cpu_threads': 0}):
+            with self.assertRaises(ValueError):
+                serve('tcp://127.0.0.1:*', 'en', **options)
+        with zmq.Context() as context, context.socket(zmq.REP) as existing:
+            existing.bind('tcp://127.0.0.1:*')
+            with self.assertRaises(zmq.ZMQError):
+                serve(existing.getsockopt_string(zmq.LAST_ENDPOINT), 'en')
 
 
 if __name__ == "__main__":

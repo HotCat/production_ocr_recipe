@@ -113,7 +113,7 @@ class HaskellWriterTests(unittest.TestCase):
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory();self.addCleanup(self.temporary.cleanup)
         self.root=Path(self.temporary.name)
-        self.environment=dict(os.environ,OCR_PRODUCTION_LOG_DIR=str(self.root))
+        self.environment=dict(os.environ,OCR_PRODUCTION_LOG_DIR=str(self.root),OCR_DEBUG_MODE="0")
         self.probe=os.environ['PRODUCTION_LOG_PROBE']
 
     def run_probe(self, app, *args):
@@ -139,6 +139,27 @@ class HaskellWriterTests(unittest.TestCase):
                     self.assertEqual(datetime.fromisoformat(row['timestamp_local']).date().isoformat(),row['local_date'])
             state=ClockGuard(self.root).check()
             self.assertEqual(state['last_production_us'],rows[-1]['occurred_at_us'])
+
+    def test_debug_rows_marked_and_existing_database_migrates_losslessly(self):
+        app = APPLICATIONS[0]
+        # Simulate a database from the previous release (no debug_mode column).
+        old_schema = (SCHEMA_DIRECTORY / 'events.sql').read_text().replace(
+            ' debug_mode INTEGER NOT NULL DEFAULT 0 CHECK(debug_mode IN (0,1)),\n', '')
+        self.assertNotIn('debug_mode', old_schema)
+        with sqlite3.connect(self.root / (app + '.sqlite3')) as db:
+            db.execute(old_schema)
+            db.execute("INSERT INTO production_events(app,occurred_at_us,timestamp_utc,timestamp_local,local_date,result,barcode) VALUES(?,1,'old','old','2026-11-17','OK','原条码')", (app,))
+        self.environment['OCR_DEBUG_MODE'] = '1'
+        result = self.run_probe(app, 'debug-cycles')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with ProductionHistory(app,self.root).connect() as db:
+            rows = db.execute('SELECT result,barcode,debug_mode FROM production_events ORDER BY id').fetchall()
+            self.assertEqual([tuple(row) for row in rows], [('OK','原条码',0),('OK','SAME001',1),('NG','SAME001',1)])
+        # A production restart must mark only its new records as production.
+        self.environment['OCR_DEBUG_MODE'] = '0'
+        self.assertEqual(self.run_probe(app).returncode, 0)
+        with ProductionHistory(app,self.root).connect() as db:
+            self.assertEqual([row[0] for row in db.execute('SELECT debug_mode FROM production_events ORDER BY id')], [0,1,1,0,0])
 
     def test_failed_event_rolls_back_clock_and_future_clock_refuses_haskell(self):
         app=APPLICATIONS[0]
@@ -168,3 +189,21 @@ class HaskellWriterTests(unittest.TestCase):
         with history.connect() as db:
             latest=db.execute('SELECT MAX(occurred_at_us) FROM production_events').fetchone()[0]
         self.assertEqual(ClockGuard(self.root).check()['last_production_us'],latest)
+
+    def test_haskell_resumes_after_audited_clock_recovery(self):
+        import time
+        from launcher.recover_clock import recover
+        app = APPLICATIONS[0]
+        self.assertEqual(self.run_probe(app).returncode, 0)
+        future = time.time_ns() // 1000 + 8 * 3600_000_000
+        with sqlite3.connect(self.root / 'clock.sqlite3') as db:
+            db.execute('UPDATE clock_state SET high_water_us=?,last_production_us=?', (future, future))
+        self.assertNotEqual(self.run_probe(app, 'init').returncode, 0)
+        recover(self.root, time.time_ns() // 1000, 'test NTP correction', 'test clock',
+                apply=True, state_directory=self.root / 'state')
+        for app in APPLICATIONS:
+            result = self.run_probe(app)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        state = ClockGuard(self.root).check()
+        self.assertIsNotNone(state['last_production_us'])
+        self.assertEqual(state['clock_recovery']['previous_high_water_us'], future)

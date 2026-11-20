@@ -56,6 +56,20 @@ class HistoryUiTests(unittest.TestCase):
         window.calendar.setCurrentPage(2026,12)
         self.assertEqual(window.calendar.counts,{})
 
+    def test_old_and_debug_records_display_distinctly(self):
+        with sqlite3.connect(self.history.path) as db:
+            db.execute('ALTER TABLE production_events DROP COLUMN debug_mode')
+        window = ProductionHistoryWindow(self.history, '旧记录')
+        self.addCleanup(self.dispose, window)
+        window.choose_day(QDate(2026,11,17))
+        column = [key for key,_ in window.columns].index('debug_mode')
+        self.assertEqual(window.table.item(0,column).text(), '关闭')
+        with sqlite3.connect(self.history.path) as db:
+            db.execute('ALTER TABLE production_events ADD COLUMN debug_mode INTEGER NOT NULL DEFAULT 0')
+            db.execute('UPDATE production_events SET debug_mode=1 WHERE result=\'NG\'')
+        window.query()
+        self.assertEqual({window.table.item(i,column).text() for i in range(window.table.rowCount())}, {'开启','关闭'})
+
     def test_launcher_opens_reusable_history_and_blocks_all_launches_for_bad_clock(self):
         store=ConfigStore(self.root/'config.json');store.load()
         manager=ProcessManager(self.root/'state',self.root)
@@ -80,3 +94,18 @@ class HistoryUiTests(unittest.TestCase):
             db.execute('UPDATE clock_state SET high_water_us=?',(good,))
         window.refresh_status()
         self.assertTrue(window.launch_button.isEnabled())
+
+    def test_recovered_clock_shows_history_warning_and_enables_launch(self):
+        import time
+        from launcher.production import ClockGuard
+        from launcher.recover_clock import recover
+        now = time.time_ns() // 1000
+        ClockGuard(self.root, lambda: now + 8 * 3600_000_000).check(True)
+        recover(self.root, now, 'NTP correction', 'trusted clock', apply=True,
+                state_directory=self.root / 'state')
+        store = ConfigStore(self.root / 'config.json'); store.load()
+        window = LauncherWindow(store, ProcessManager(self.root / 'state', self.root))
+        self.addCleanup(self.dispose, window)
+        self.assertTrue(window.launch_button.isEnabled())
+        self.assertIn('校时后尚无生产记录', window.clock_banner.text())
+        self.assertIn('历史记录保留原时间', window.clock_banner.text())

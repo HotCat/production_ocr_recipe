@@ -3,17 +3,23 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import multiprocessing
 import os
+import signal
 import threading
+import time
+from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import cv2
-import numpy as np
+if TYPE_CHECKING:
+    import numpy as np
+
 import zmq
 
 
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
+MAX_WORKERS = 2
 
 
 def _result_mapping(result: Any) -> dict[str, Any]:
@@ -48,12 +54,12 @@ def normalize_results(results: Any) -> dict[str, Any]:
 
 
 class PaddleEngine:
-    def __init__(self, lang: str, device: str | None = None) -> None:
+    def __init__(self, lang: str, device: str | None = "cpu", cpu_threads: int = 2) -> None:
         if not device or device.lower().startswith("cpu"):
             os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "False")
         from paddleocr import PaddleOCR
 
-        options: dict[str, Any] = {"lang": lang}
+        options: dict[str, Any] = {"lang": lang, "cpu_threads": cpu_threads}
         if device:
             options["device"] = device
         # Installed packages supply the already tested models explicitly. No model
@@ -80,6 +86,9 @@ class PaddleEngine:
 
 def handle_request(frames: list[bytes], engine: Any) -> bytes:
     try:
+        import cv2
+        import numpy as np
+
         if not frames:
             raise ValueError("missing request header")
         header = json.loads(frames[0].decode("utf-8"))
@@ -120,27 +129,184 @@ def serve_requests(socket: zmq.Socket, engine: Any,
         socket.send(reply)
 
 
-def serve(endpoint: str, lang: str, device: str | None) -> None:
-    engine = PaddleEngine(lang, device)
-    context = zmq.Context.instance()
-    with context.socket(zmq.REP) as socket:
-        socket.setsockopt(zmq.LINGER, 0)
-        socket.setsockopt(zmq.MAXMSGSIZE, MAX_IMAGE_BYTES)
-        socket.setsockopt(zmq.RCVHWM, 8)
-        socket.setsockopt(zmq.SNDHWM, 8)
-        socket.bind(endpoint)
-        logging.info("PaddleOCR service listening at %s; one model, serial inference", endpoint)
-        serve_requests(socket, engine)
+def _worker(backend: str, identity: bytes, lang: str, device: str | None,
+            cpu_threads: int, stop: Any, engine_factory: Any) -> None:
+    """A spawned process owns one pipeline and never overlaps its predict calls."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # Set these before importing Paddle/OpenCV/NumPy in the fresh interpreter.
+    for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                 "NUMEXPR_NUM_THREADS"):
+        os.environ[name] = str(cpu_threads)
+    os.environ["OMP_WAIT_POLICY"] = "PASSIVE"
+    import cv2
+
+    cv2.setNumThreads(cpu_threads)
+    context = zmq.Context()
+    try:
+        engine = engine_factory(lang, device, cpu_threads)
+        with context.socket(zmq.DEALER) as socket:
+            socket.setsockopt(zmq.LINGER, 0)
+            socket.setsockopt(zmq.IDENTITY, identity)
+            socket.connect(backend)
+            socket.send_multipart([b"READY"])
+            logging.info("OCR %s ready; pid=%s, CPU threads=%s", identity.decode(),
+                         os.getpid(), cpu_threads)
+            while not stop.is_set():
+                if not socket.poll(100):
+                    continue
+                request = socket.recv_multipart()
+                started = time.monotonic()
+                logging.debug("OCR %s request started", identity.decode())
+                reply = handle_request(request[2:], engine)
+                socket.send_multipart([b"RESULT", *request[:2], reply])
+                logging.info("OCR %s request completed in %.3fs", identity.decode(),
+                             time.monotonic() - started)
+    finally:
+        context.term()
+
+
+def _send_reply(frontend: zmq.Socket, route: list[bytes], reply: bytes) -> None:
+    try:
+        frontend.send_multipart([*route, reply], zmq.DONTWAIT)
+    except zmq.ZMQError as exc:
+        if exc.errno not in (zmq.EHOSTUNREACH, zmq.EAGAIN):
+            raise
+        # A timed-out/disconnected client must not block the other clients.
+        logging.warning("Discarded reply for a disconnected or full client")
+
+
+def serve(endpoint: str, lang: str, device: str | None = "cpu", workers: int = 2,
+          cpu_threads: int = 2, *, stop: Any = None, ready: Any = None,
+          engine_factory: Any = PaddleEngine, startup_timeout: float = 300) -> None:
+    """Route REQ clients to at most two independent, serial model processes.
+
+    Only read another client request when a worker is idle. Excess work stays
+    in ZeroMQ's bounded queues rather than an unbounded Python task queue.
+    A failed worker fails the pool so the supervisor can restart it cleanly.
+    The optional stop/ready/factory arguments support hardware-free tests.
+    """
+    if not 1 <= workers <= MAX_WORKERS:
+        raise ValueError(f"workers must be between 1 and {MAX_WORKERS}")
+    if cpu_threads < 1:
+        raise ValueError("cpu_threads must be positive")
+    spawn = multiprocessing.get_context("spawn")
+    worker_stop = spawn.Event()
+    stop = stop if stop is not None else threading.Event()
+    context = zmq.Context()
+    processes = {}
+    idle: deque[bytes] = deque()
+    initialized = set()
+    inflight: dict[bytes, list[bytes]] = {}
+    frontend = context.socket(zmq.ROUTER)
+    backend = context.socket(zmq.ROUTER)
+    try:
+        for socket in (frontend, backend):
+            socket.setsockopt(zmq.LINGER, 0)
+            socket.setsockopt(zmq.MAXMSGSIZE, MAX_IMAGE_BYTES)
+            socket.setsockopt(zmq.RCVHWM, 8)
+            socket.setsockopt(zmq.SNDHWM, 8)
+        frontend.setsockopt(zmq.ROUTER_MANDATORY, 1)
+        # Reserve the public endpoint before loading any model instances.
+        frontend.bind(endpoint)
+        endpoint = frontend.getsockopt_string(zmq.LAST_ENDPOINT)
+        backend.bind("tcp://127.0.0.1:*")
+        backend_endpoint = backend.getsockopt_string(zmq.LAST_ENDPOINT)
+        for index in range(workers):
+            identity = f"worker-{index + 1}".encode()
+            process = spawn.Process(
+                target=_worker, name=identity.decode(), daemon=True,
+                args=(backend_endpoint, identity, lang, device, cpu_threads,
+                      worker_stop, engine_factory))
+            process.start()
+            processes[identity] = process
+
+        poller = zmq.Poller()
+        poller.register(backend, zmq.POLLIN)
+        accepting = False
+        announced = False
+        deadline = time.monotonic() + startup_timeout
+        while not stop.is_set():
+            for identity, process in processes.items():
+                if process.exitcode is not None:
+                    raise RuntimeError(f"OCR {identity.decode()} exited ({process.exitcode})")
+            all_ready = len(initialized) == workers
+            if not all_ready and time.monotonic() >= deadline:
+                raise TimeoutError("OCR workers did not initialize before the startup deadline")
+            if all_ready and not announced:
+                logging.info("PaddleOCR service listening at %s; %s model workers, "
+                             "CPU threads per worker=%s", endpoint, workers, cpu_threads)
+                announced = True
+                if ready is not None:
+                    ready.put(endpoint)
+            can_accept = all_ready and bool(idle)
+            if can_accept and not accepting:
+                poller.register(frontend, zmq.POLLIN)
+            elif accepting and not can_accept:
+                poller.unregister(frontend)
+            accepting = can_accept
+            events = dict(poller.poll(100))
+            if backend in events:
+                message = backend.recv_multipart()
+                identity, frames = message[0], message[1:]
+                if identity not in processes:
+                    raise RuntimeError("Unknown OCR worker")
+                if frames == [b"READY"] and identity not in initialized:
+                    initialized.add(identity)
+                elif (len(frames) == 4 and frames[0] == b"RESULT"
+                      and identity in inflight and frames[1:3] == inflight[identity]):
+                    _send_reply(frontend, inflight.pop(identity), frames[3])
+                else:
+                    raise RuntimeError("Invalid OCR worker response")
+                idle.append(identity)
+            if frontend in events:
+                request = frontend.recv_multipart()
+                # Existing REQ clients supply [routing-id, empty, header, image].
+                if len(request) < 3 or request[1] != b"":
+                    logging.warning("Discarded request without a REQ routing envelope")
+                    continue
+                identity = idle.popleft()
+                inflight[identity] = request[:2]
+                backend.send_multipart([identity, *request])
+    finally:
+        for route in inflight.values():
+            _send_reply(frontend, route, b"ERROR: OCR service is stopping; retry after restart")
+        worker_stop.set()
+        # Use one shared grace period, including when a worker is in inference.
+        deadline = time.monotonic() + 5
+        for process in processes.values():
+            process.join(timeout=max(0, deadline - time.monotonic()))
+        for process in processes.values():
+            if process.is_alive():
+                process.terminate()
+        for process in processes.values():
+            process.join(timeout=2)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=2)
+            process.close()
+        frontend.close()
+        backend.close()
+        context.term()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Shared PaddleOCR ZeroMQ service")
     parser.add_argument("--bind", default=os.getenv("PADDLEOCR_BIND", "tcp://127.0.0.1:5555"))
     parser.add_argument("--lang", default=os.getenv("PADDLEOCR_LANG", "en"))
-    parser.add_argument("--device", default=os.getenv("PADDLEOCR_DEVICE"))
+    parser.add_argument("--device", default=os.getenv("PADDLEOCR_DEVICE", "cpu"))
+    parser.add_argument("--workers", type=int, choices=range(1, MAX_WORKERS + 1),
+                        default=os.getenv("PADDLEOCR_WORKERS", "2"))
+    parser.add_argument("--cpu-threads", type=int,
+                        default=os.getenv("PADDLEOCR_CPU_THREADS", "2"))
     args = parser.parse_args()
+    # argparse does not check choices for an environment-supplied default.
+    if not 1 <= args.workers <= MAX_WORKERS or args.cpu_threads < 1:
+        parser.error("workers must be 1 or 2, and cpu-threads must be positive")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    serve(args.bind, args.lang, args.device)
+    stop = threading.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda _signum, _frame: stop.set())
+    serve(args.bind, args.lang, args.device, args.workers, args.cpu_threads, stop=stop)
 
 
 if __name__ == "__main__":

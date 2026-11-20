@@ -1,11 +1,12 @@
 # Shared PaddleOCR service
 
-One process loads one PaddleOCR 3.x pipeline. Independent clients use ZeroMQ
-REQ sockets connected to its REP socket; the server processes inference serially
-and pairs every reply with the requesting client. At least two simultaneous
-clients are supported. There is no strict FIFO order across peers. Each client
-thread/process must use its own socket. Client timeouts include queue time and
-do not cancel work already accepted by the server.
+A ZeroMQ broker routes independent REQ clients to **two CPU worker processes**.
+Each spawned worker owns one PaddleOCR 3.x pipeline and runs inference serially;
+up to **two requests run concurrently** across the service. Further requests
+wait until a worker becomes idle. Replies return to the requesting client,
+including when requests finish out of order. There is no strict FIFO order
+across peers. Each client thread/process must use its own socket. Client timeouts
+include queue time and do not cancel work already accepted by the server.
 
 ## Environment setup
 
@@ -34,12 +35,30 @@ remote model-host checks. `PADDLEOCR_MODEL_ROOT` can override this directory.
 CPU inference disables the current PaddleX oneDNN default; compatible hosts can
 set `PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=True`.
 
+CPU is the default device. `PADDLEOCR_WORKERS=2` (or `--workers 2`) is the default
+and hard maximum; use `1` to fall back to serial processing. Values outside 1–2
+are rejected. `PADDLEOCR_CPU_THREADS=2` (or `--cpu-threads 2`) controls Paddle's
+CPU threads per worker and the OpenCV/OpenMP/BLAS thread settings. The default
+uses two inference threads per worker to leave CPU capacity for the camera
+applications. These settings control compute pools, not the total number of
+OS helper threads. Two model copies consume more RAM than the previous single
+pipeline; measure memory and latency on the production PC before deployment.
+The existing models, image preprocessing and Haskell request protocol are
+unchanged. No client rebuild is needed.
+
 The default endpoint is `tcp://127.0.0.1:5555`. Set `PADDLEOCR_BIND` on the server
 and matching `PADDLEOCR_ENDPOINT` on clients to change it. Wait for the listening
 message after models load. Run only one listener per endpoint. The Haskell
 client's reply deadline defaults to 120 seconds (`PADDLEOCR_TIMEOUT_MS`). After
 a timeout it discards its REQ socket; accepted inference may still finish.
 High-water marks are eight messages per peer, with backpressure under load.
+The broker reads new requests only when a worker is free; it does not accumulate
+an unbounded Python task queue. The listening message appears only after both
+models initialize. An inference exception returns `ERROR:` and the worker
+continues. If a worker process dies or initialization exceeds five minutes,
+the entire pool exits and systemd restarts it. In-flight requests may fail;
+the service does not automatically replay production requests. Stopping the
+service shuts down both children as well as the broker.
 
 ## User service
 
@@ -56,6 +75,10 @@ apply changes with `systemctl --user restart paddleocr.service`. Ensure no other
 service owns the endpoint before enabling a new instance. The optional argument
 `production-paddleocr.service` retains support for that alternative unit name;
 run only one of the two units on a given endpoint.
+The installed unit explicitly sets `PADDLEOCR_WORKERS=2` and
+`PADDLEOCR_CPU_THREADS=2`. To tune them, use `systemctl --user edit
+paddleocr.service` with a `[Service]` section and `Environment=...` lines,
+then restart the service. CLI options override environment variables.
 The unit starts at login. Use `systemctl --user disable --now
 paddleocr.service` to stop and disable it. For system-wide deployment,
 the separate OCR Debian package is retained in
@@ -72,10 +95,22 @@ uses only a metadata frame. Errors start with `ERROR:`.
 services/paddleocr_service/.venv/bin/python -m unittest services.paddleocr_service.test_server
 ```
 
-Tests exercise transport, response normalization and independent concurrent
-clients. They verify responses remain paired and the maximum concurrent engine
-call count is one, without loading real models. Application test helpers accept
+Tests exercise transport, response normalization and the actual spawned worker
+pool without loading real models. Three concurrent clients verify that exactly
+two independent pipelines run simultaneously, the third request waits, replies
+remain paired even out of order, and freed workers immediately take queued work.
+They also cover one-worker fallback, request errors, abandoned clients, worker
+startup/crash cleanup, invalid limits and occupied endpoints. The single-worker
+transport utility is tested separately. Application test helpers accept
 `--real` to additionally use an already running PaddleOCR endpoint.
+
+Two-worker validation on 2026-11-20: all 11 unit/transport tests passed. Three
+simultaneous real 800×100 PNG requests on this workstation returned the expected
+Chinese/English text at approximately 0.98 s, 1.00 s and 1.80 s including queue
+time. Worker logs confirmed two overlapping inferences and then the queued
+third request. The existing compiled `Engraving+Compare --compare-image` client
+also passed through the restarted service at port 5555. These synthetic timings
+are a local check, not a latency guarantee under production camera/UI load.
 
 ## Workstation migration, 2026-11-17
 

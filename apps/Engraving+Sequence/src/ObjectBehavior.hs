@@ -24,6 +24,7 @@ module ObjectBehavior (
 ) where
 
 import qualified ProductionLog as PL
+import qualified ProductionDebug as PD
 
 import RuntimePaths
 
@@ -344,11 +345,12 @@ winPeriod' sg = proc oi -> do
                                  chkSer $=! Nothing
                                  atomically $ writeTChan collect_batch $ "base number is not set!"
                                (Just seq) -> do
-                                 result <- try (predictOcr r ocr) :: IO (Either IOException String)
+                                 result <- tryPredictOcr r ocr
                                  curSerial <- case result of
                                    Right value -> pure value
                                    Left failure -> do
-                                     PL.rememberObservation "engraving.error" (displayException failure)
+                                     PL.rememberObservation "engraving.error" failure
+                                     atomically $ writeTChan collect_batch $ "PaddleOCR识别失败：" ++ failure ++ "\n"
                                      ocrState $=! OcrFail
                                      chkSer $=! Nothing
                                      pure ""
@@ -587,10 +589,13 @@ overLord' g sg = proc oi -> do
 
                     let preM = do
                           case seq of
-                            Nothing -> return ()
+                            Nothing -> when PD.debugMode $ do
+                              PD.finishDebugTrigger
+                              atomically $ writeTChan collect_batch "[调试] 起始号已被清除，请设置后重新触发\n"
                             (Just seq) -> do
                               let baseNum = printf ("%0" ++ show (abs (serStart seq - serEnd seq)) ++ "d") (serBody seq)
                               when (isNothing b10) $ do
+                                when PD.debugMode $ ocrState $=! OcrPending
                                 PL.rememberObservation "engraving.raw" ""
                                 PL.rememberObservation "engraving.error" ""
                                 chkSer $=! Just baseNum
@@ -601,11 +606,14 @@ overLord' g sg = proc oi -> do
                           PL.recordProduction $ (PL.productionEvent "Engraving+Sequence" passed)
                             { PL.eventSerial = T.unpack (T.filter isNumber (T.pack raw)), PL.eventDetected = raw, PL.eventReverse = Just b12
                             , PL.eventReason = reason ++ failure }
-                        serM = do
+                        serM = when (os == OcrPass || os == OcrFail) $ PD.withDebugVerdict $ do
                           case os of
                             OcrPass -> do
                               case seq of
-                                Nothing -> return ()
+                                Nothing -> when PD.debugMode $ do
+                                  logVerdict False "检测期间起始号已被清除"
+                                  modifyIORef' ng (+1)
+                                  modbusNg
                                 (Just seq) -> do
                                   logVerdict True "顺号匹配"
                                   if b12 then refSeq $=! (Just $ seq {serBody = (serBody seq) - 1})
@@ -891,6 +899,20 @@ saveConfig' sg = proc oi -> do
                   pushFont msyhlFont
                   separator
                   clicked <- button "保存参数"
+                  when PD.debugMode $ do
+                    sameLine
+                    debugClicked <- button "触发modbus"
+                    when debugClicked $ do
+                      debugControls <- get ctrlMaps
+                      let (Just (ChanHub2 debugMessages)) = Map.lookup "serial-number-ocr-collect-batch" debugControls
+                      let (Just (CompHub1 markerRef)) = Map.lookup "serial-number-sequence-marker" debugControls
+                      marker <- get markerRef
+                      if isJust marker then do
+                        accepted <- PD.requestDebugTrigger
+                        atomically $ writeTChan debugMessages $
+                          if accepted then "[调试] 已提交模拟Modbus触发，执行完整生产检测\n"
+                                      else "[调试] 上一次检测尚未结束，请等待结果后重试\n"
+                      else atomically $ writeTChan debugMessages "[调试] 请先设置起始号及顺号区域，再触发检测\n"
                   sameLine
                   showHelp msyhlFont "保存当前配置的所有参数，如果临时调整了参数，想进行快速还原，可以按x键"
                   when clicked $ do
@@ -1333,13 +1355,21 @@ serialNumOCR' sg = proc oi -> do
                       -- r = runExcept $ cvtColor rgb bgr (matFlip src FlipVertically) >>= (flip matSubRect) subRect >>= (\img-> return $ matFlip (matTranspose img) FlipVertically) >>= cvtColor bgr rgb >>= resize (ResizeRel $ pure (realToFrac b11)) InterLinear
                       r = runExcept $ cvtColor rgb bgr (matFlip src FlipVertically) >>= (flip matSubRect) subRect >>= cvtColor bgr rgb >>= resize (ResizeRel $ pure (realToFrac b11)) InterLinear
                   wpM ctrlMaps r ocr
+                  b <- modbusTrigger
+                  plc $=! (if b == "ng" then Nothing else Just b)
+
 
                   when (isEvent b21') $ do
                     case r of
                       (Left _) -> tr $=! Nothing
                       (Right r) -> do
-                        serNum <- predictOcr r ocr
-                        tr $=! (Just (T.unpack (T.filter (\n-> (isNumber n)) $ T.pack serNum))) -- (Just (T.unpack (T.filter (\n-> (isNumber n) || (isAlpha n)) $ T.pack serNum)))
+                        outcome <- tryPredictOcr r ocr
+                        case outcome of
+                          Left failure -> do
+                            tr $=! Nothing
+                            atomically $ writeTChan collect $ "PaddleOCR识别失败：" ++ failure ++ "\n"
+                          Right serNum ->
+                            tr $=! Just (T.unpack (T.filter isNumber (T.pack serNum)))
                     return ()
 
                   let FontSet{..} = fontSet
@@ -1371,11 +1401,6 @@ serialNumOCR' sg = proc oi -> do
                         (Right r) -> do
                           atomically $ writeTChan submit r
                       return ()
-
-                    b <- modbusTrigger
-                    case b of
-                      "ng" -> plc $=! Nothing
-                      ser -> plc $=! (Just b)
 
                     when (sg == (Running 1)) $ do
                       setNextWindowPos pos ImGuiCond_Always Nothing

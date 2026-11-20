@@ -8,7 +8,7 @@ cd "$repo_dir/apps/Barcode+Sequence"
 export STACK_YAML="$PWD/stack.yaml"
 if [ -f stack.local.yaml ]; then export STACK_YAML="$PWD/stack.local.yaml"; fi
 stack ghc -- -threaded -package sqlite-simple -package text -package containers \
-  -package time -package directory -package filepath -package template-haskell \
+  -package unix -package time -package directory -package filepath -package template-haskell \
   -i../../shared/production-log -outputdir "$test_dir" \
   ../../shared/production-log/tests/ProductionLogProbe.hs -o "$test_dir/probe"
 cd "$repo_dir"

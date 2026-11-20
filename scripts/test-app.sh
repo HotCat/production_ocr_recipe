@@ -10,7 +10,7 @@ shift
 case "$application" in
   Barcode+Sequence|Barcode+Sequence+Barcode|Barcode+Sequence+Engraving) runner=tests/run_barcode_guard_tests.sh ;;
   Engraving+Compare) runner=tests/run_engraving_compare_tests.sh ;;
-  Engraving+Sequence) echo 'No application-specific test runner; run the shared service tests.' >&2; exit 2 ;;
+  Engraving+Sequence) runner=tests/run_ocr_tests.sh ;;
   *) echo "Unknown application: $application" >&2; exit 2 ;;
 esac
 cd "$repo_dir/apps/$application"

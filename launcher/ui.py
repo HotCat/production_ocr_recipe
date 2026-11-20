@@ -195,7 +195,7 @@ class LauncherWindow(QMainWindow):
         program = self.program()
         if program:
             self.inspector_title.setText(program["name"])
-            self.identity_label.setText(program["id"])
+            self.identity_label.setText(program["id"] + ("  ·  调试模式：模拟 Modbus" if self.config.get("debug_mode", False) else ""))
             for key, variable in program.get("parameters", {}).items():
                 definition = self.config["parameters"][key]
                 value = parameter_value(self.config, program, key)
@@ -247,8 +247,18 @@ class LauncherWindow(QMainWindow):
         try:
             state = self.manager.clock_status()
             self.clock_error = None
-            self.clock_banner.setText("时间检查正常  ·  上次生产：" + display_time(state['last_production_us']))
-            self.clock_banner.setStyleSheet("color: #16704b; padding: 6px;")
+            recovery = state.get('clock_recovery')
+            label = '校时后上次生产：' if recovery else '上次生产：'
+            last = display_time(state['last_production_us'])
+            if recovery and state['last_production_us'] is None:
+                last = '校时后尚无生产记录'
+            message = '时间检查正常  ·  ' + label + last
+            if recovery:
+                message += ('\n已在 ' + display_time(recovery['recovered_at_us']) +
+                            ' 恢复时间记录；校时前历史记录保留原时间，其时间可能不准确。')
+            self.clock_banner.setText(message)
+            self.clock_banner.setStyleSheet('color: #8a5300; padding: 6px;' if recovery
+                                           else 'color: #16704b; padding: 6px;')
         except (OSError, ValueError) as error:
             self.clock_error = str(error)
             self.clock_banner.setText(self.clock_error)

@@ -21,6 +21,8 @@ WorkingDirectory=$repo_dir
 ExecStart="$repo_dir/services/paddleocr_service/run.sh"
 Environment=PADDLEOCR_BIND=tcp://127.0.0.1:5555
 Environment=PADDLEOCR_DEVICE=cpu
+Environment=PADDLEOCR_WORKERS=2
+Environment=PADDLEOCR_CPU_THREADS=2
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20

@@ -68,6 +68,18 @@ main = do
     (completions == [NoEvent, Event matched, NoEvent, Event mismatch, NoEvent, Event matched])
   putStrLn "PASS: substring comparison, fail-closed verdicts and continuity decisions"
 
+  debugRuntime <- newBarcodeRuntime
+  let debugInspect enabled _ = pure (validateBarcode enabled "AB-0012" (Right "AB-0012"))
+  forM_ [1..2 :: Int] $ \_ -> do
+    queueDebugBarcodeInspectionWith debugInspect debugRuntime True True (Right ())
+    outcome <- waitResult debugRuntime
+    assert "each debug click inspects identical labels again" (barcodeVerdict outcome == BarcodeAccepted)
+    pollBarcodeInspection debugRuntime >>= assert "one completion per debug click" . (== Nothing)
+  queueDebugBarcodeInspectionWith debugInspect debugRuntime True True (Left "invalid ROI")
+  invalid <- waitResult debugRuntime
+  assert "invalid debug ROI completes as NG" (barcodeVerdict invalid == BarcodeReadError)
+  putStrLn "PASS: debug clicks repeat identical labels and complete invalid ROI as NG"
+
   ocrCalls <- newIORef (0 :: Int)
   let decode _ = pure "AB-0012"
       ocr _ = modifyIORef' ocrCalls (+1) >> pure "AB-0012"

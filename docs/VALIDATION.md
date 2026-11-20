@@ -137,3 +137,59 @@ Physical acceptance with both cameras connected remains necessary. Follow
 confirm the selected USB3 serial in 运行日志, then check the live image after
 restarting the application. No application camera/profile configuration was
 changed by this fix.
+
+## Offline Modbus debug trigger (2026-11-19)
+
+- Rebuilt all five clients with the shared `ProductionDebug` module and
+  config-only `debug_mode` flag. Default/user configuration remains false.
+- Compiled actual Barcode Haskell/C++ modules for all five apps and tested
+  against ephemeral loopback listeners. Debug initialization, trigger reads,
+  and OK/NG outputs open no socket. Production mode still reads register 0
+  (77 triggers), writes OK register 4=99 and NG register 2=88, and respects
+  configured host/port/slave. Concurrent debug clicks latch one pulse; busy
+  requests are rejected, scheduler verdicts run once, and OK/NG both rearm.
+- Barcode queue tests cover repeated identical labels across separate debug
+  requests, a single completion, busy pair rejection, both ROI failures, normal
+  guard/sequence decisions, and asynchronous error recovery.
+- SQLite integration tests cover lossless migration of existing rows to
+  debug_mode=0, new debug OK/NG rows marked 1, one row per final debug verdict,
+  production restart marking new rows 0, concurrent writers, transaction failure
+  rollback, and the existing production clock guard. Haskell writer setup is
+  serialized using an automatically released advisory file lock to avoid
+  schema/attached-database deadlocks.
+- Launcher tests verify strict JSON booleans, legacy default-off behavior,
+  authoritative child environment, reload/save persistence, inspector indicator,
+  and history display for both legacy and debug events.
+- Existing barcode/dual-barcode and engraving comparator Haskell/CLI regression
+  suites passed with synthetic images and mock OCR responses. No real camera,
+  PLC connection or production event database was used by these checks. Live
+  camera/production-line GUI testing remains an operator check.
+
+## Engraving+Sequence OCR preview recovery (2026-11-20)
+
+The `刻字顺号` evaluation thread previously called `renderImage "my.png"`,
+which writes through Husk to `1/my.png`. A missing `1/` directory threw before
+ZeroMQ could send a request, permanently stopping that preview worker. The
+client now encodes PNG only in memory and reports per-request service/UTF-8
+errors to its console channel while continuing to accept evaluation requests.
+Cancellation still stops the worker. Empty OCR responses produce a visible
+message. The direct start-number OCR path also handles service errors, and
+production OCR failures are sent to the console as well as the production log.
+
+Build with `scripts/build-app.sh 'Engraving+Sequence'`. Close and reopen a running
+instance after installing the new binary; a thread already stopped in an older
+process cannot recover by reconnecting the service. The app also supports
+`Camera --ocr-image IMAGE` for diagnostics without GUI, camera, PLC or database
+initialization, using the same configured PaddleOCR endpoint and timeout.
+
+```sh
+scripts/test-app.sh 'Engraving+Sequence' --real
+```
+
+Run after building. The compiled probe exercises the same `procSerialNum`
+worker as the GUI from a temporary directory without `1/`. Tests cover multiple
+responses after inference failure, malformed UTF-8 and empty recognition;
+request timeouts, cancellation and repeated real service inference. Compiled
+CLI tests also check the multipart PNG protocol, UTF-8 replies, failures and
+simultaneous real clients. Test fixtures do not capture cameras or write to
+production history.

@@ -14,11 +14,11 @@ trap 'rm -rf -- "$test_dir"' EXIT HUP INT TERM
 stack ghc -- -threaded -package husk-scheme -package opencv -package mtl \
   -package inline-c -package inline-c-cpp -package raw-strings-qq \
   -package text -package bytestring -package stm -package async -package Yampa \
-  -isrc -i"$generated_dir" -Isrc -I../../dependencies/modbuspp \
+  -i../../shared/production-log -isrc -i"$generated_dir" -Isrc -I../../dependencies/modbuspp \
   -optcxx-std=c++11 -L/opt/MVS/lib/64 -lMvCameraControl \
   -optl-Wl,-rpath,/opt/MVS/lib/64 -lzmq -lzbar \
   -outputdir "$test_dir" tests/BarcodeGuardSpec.hs -o "$test_dir/guard-tests"
-stack ghc -- -threaded -package async -package Yampa -isrc \
+stack ghc -- -threaded -package async -package Yampa -i../../shared/production-log -isrc \
   -outputdir "$test_dir/dual" tests/DualBarcodeSpec.hs -o "$test_dir/dual-tests"
 "$test_dir/dual-tests"
 if [ "${1:-}" = --real ]; then

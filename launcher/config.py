@@ -69,6 +69,8 @@ def validate_value(config: dict, key: str, value):
 def validate_config(config: dict) -> None:
     if not isinstance(config, dict) or config.get("schema_version") != 1:
         raise ValueError("不支持的配置文件版本")
+    if type(config.get("debug_mode", False)) is not bool:
+        raise ValueError("debug_mode 必须是 true 或 false")
     cameras = config.get("cameras")
     if not isinstance(cameras, list) or not cameras or any(not isinstance(c, str) or not c.strip() or "\0" in c for c in cameras) or len(set(cameras)) != len(cameras):
         raise ValueError("相机名称列表不能为空，且不能重复")
@@ -176,6 +178,12 @@ def launch_spec(config: dict, program: dict, repository: Path = REPOSITORY) -> d
     # Environment entries may contain paths based on the repository, too.
     environment = {key: expand(value) for key, value in program.get("environment", {}).items()}
     environment.update(bound_values)
+    # Configuration is authoritative even if the parent shell/extra environment
+    # contains OCR_DEBUG_MODE. No operator UI control can change this flag.
+    enabled = config.get("debug_mode", False)
+    if type(enabled) is not bool:
+        raise ValueError("debug_mode 必须是 true 或 false")
+    environment["OCR_DEBUG_MODE"] = "1" if enabled else "0"
     command = [expand(token) for token in program["command"]]
     directory = Path(expand(program["cwd"])).expanduser()
     if not directory.is_absolute():

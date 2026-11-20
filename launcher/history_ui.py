@@ -16,8 +16,8 @@ COLUMNS = [('timestamp_local','完整时间（含时区）'),('result','结果')
            ('packaging_barcode','包装条码'),('serial_number','序列号'),('detected_text','识别文字'),
            ('preset_text','预设文字'),('bank','银行'),('integrity_guard','产品印字校验'),
            ('reverse','Reverse'),('packaging_integrity_guard','包装印字校验'),
-           ('reason','说明')]
-BOOLEAN_COLUMNS = {'integrity_guard','reverse','packaging_integrity_guard'}
+           ('debug_mode','调试模式'),('reason','说明')]
+BOOLEAN_COLUMNS = {'integrity_guard','reverse','packaging_integrity_guard','debug_mode'}
 APP_COLUMNS = {
     'Barcode+Sequence': {'barcode', 'integrity_guard', 'reverse'},
     'Barcode+Sequence+Barcode': {'barcode', 'packaging_barcode', 'integrity_guard', 'packaging_integrity_guard', 'reverse'},
@@ -73,7 +73,7 @@ class ProductionHistoryWindow(QDialog):
     def __init__(self, history: ProductionHistory, title: str, parent=None):
         super().__init__(parent)
         self.history = history
-        visible = APP_COLUMNS[history.app] | {'timestamp_local', 'result', 'reason'}
+        visible = APP_COLUMNS[history.app] | {'timestamp_local', 'result', 'debug_mode', 'reason'}
         self.columns = [(key, label) for key, label in COLUMNS if key in visible]
         self.offset = 0
         self.page_size = 200
@@ -172,7 +172,7 @@ class ProductionHistoryWindow(QDialog):
             self.table.setRowCount(len(self.rows))
             for i,row in enumerate(self.rows):
                 for j,(key,_) in enumerate(self.columns):
-                    item=QTableWidgetItem(format_cell(key,row[key]));item.setToolTip(item.text())
+                    item=QTableWidgetItem(format_cell(key,row.get(key, 0 if key == 'debug_mode' else None)));item.setToolTip(item.text())
                     if key=='result':item.setForeground(QColor('#16815d' if row[key]=='OK' else '#c23a3a'))
                     self.table.setItem(i,j,item)
             self.summary.setText(f"总计 {data['total']}  ·  OK {data['ok']}  ·  NG {data['ng']}"+('  ·  尚无生产记录' if not self.history.path.exists() else ''))

@@ -192,14 +192,24 @@ sumImage img = realToFrac $ unsafePerformIO $
 
 
 procSerialNum :: PPOCR -> TChan (Mat ('S ['D, 'D]) ('S 3) ('S Word8)) -> TChan String -> IO ()
-procSerialNum ocr submit receive = do
-  forever $ do
-    r <- atomically $ readTChan submit
-    renderImage "my.png" r
-    raw <- predictOcr r ocr
-    when (raw /= "") $ do
-      atomically $ writeTChan receive (T.unpack (T.filter (\n-> (isNumber n) || (isAlpha n)) $ T.pack raw))
-    return ()
+procSerialNum ocr submit receive = forever $ do
+  image <- atomically $ readTChan submit
+  -- Requests already encode PNG in memory. The old debug dump used the
+  -- hardwired 1/my.png path and killed this thread before reaching ZeroMQ.
+  outcome <- tryPredictOcr image ocr
+  let message = case outcome of
+        Left failure -> "PaddleOCR识别失败：" ++ failure
+        Right "" -> "PaddleOCR未识别到文字"
+        Right raw -> T.unpack (T.filter (\n -> isNumber n || isAlpha n) (T.pack raw))
+  atomically $ writeTChan receive (message ++ "\n")
+
+-- Keep transport/encoding errors visible without killing the preview worker
+-- or the GUI. Cancellation must still terminate a worker promptly.
+tryPredictOcr :: Mat ('S ['D, 'D]) ('S 3) ('S Word8) -> PPOCR -> IO (Either String String)
+tryPredictOcr image ocr = E.catch (Right <$> predictOcr image ocr) $ \failure ->
+  case E.fromException failure :: Maybe E.SomeAsyncException of
+    Just _ -> E.throwIO (failure :: E.SomeException)
+    Nothing -> pure (Left (E.displayException failure))
 
 
 

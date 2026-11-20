@@ -284,7 +284,7 @@ def main():
         cli = ocr.root / 'usr/bin/paddleocr-service'
         cli.parent.mkdir(parents=True, exist_ok=True)
         cli.symlink_to('/opt/paddleocr-service/ocr/launch')
-        artifacts.append(ocr.finish(output, 'Shared serial CPU PaddleOCR ZeroMQ service',
+        artifacts.append(ocr.finish(output, 'Shared two-worker CPU PaddleOCR ZeroMQ service',
             'Conflicts: engraving-sequence-ocr\nReplaces: engraving-sequence-ocr\n'))
     # Each package has an independent installer/archive and no cross-package dependency.
     bundles = []

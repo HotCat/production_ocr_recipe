@@ -11,7 +11,7 @@ stack build Camera --copy-bins --local-bin-path bin
 test_dir=$(mktemp -d /tmp/engraving-compare-tests.XXXXXX)
 trap 'rm -rf -- "$test_dir"' EXIT HUP INT TERM
 stack ghc -- -threaded -package async -package text -package containers -package transformers \
-  -package husk-scheme -isrc -L/opt/MVS/lib/64 -lMvCameraControl \
+  -package husk-scheme -i../../shared/production-log -isrc -L/opt/MVS/lib/64 -lMvCameraControl \
   -optl-Wl,-rpath,/opt/MVS/lib/64 -outputdir "$test_dir" \
   tests/EngravingCompareSpec.hs -o "$test_dir/compare-tests"
 "$test_dir/compare-tests"

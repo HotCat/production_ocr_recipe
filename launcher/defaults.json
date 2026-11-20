@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "debug_mode": false,
   "cameras": [
     "Hikvision",
     "MV-SUA131GC#0",
@@ -30,7 +31,7 @@
     {
       "id": "Barcode+Sequence",
       "instance_key": "Barcode+Sequence",
-      "name": "条码 + 序列号",
+      "name": "条码顺号",
       "command": [
         "{repo}/scripts/run-app.sh",
         "Barcode+Sequence"
@@ -51,7 +52,7 @@
     {
       "id": "Barcode+Sequence+Barcode",
       "instance_key": "Barcode+Sequence+Barcode",
-      "name": "双条码 + 序列号",
+      "name": "双条码顺号",
       "command": [
         "{repo}/scripts/run-app.sh",
         "Barcode+Sequence+Barcode"
@@ -72,7 +73,7 @@
     {
       "id": "Barcode+Sequence+Engraving",
       "instance_key": "Barcode+Sequence+Engraving",
-      "name": "条码 + 序列号 + 刻字",
+      "name": "条码和刻字顺号",
       "command": [
         "{repo}/scripts/run-app.sh",
         "Barcode+Sequence+Engraving"
@@ -93,7 +94,7 @@
     {
       "id": "Engraving+Sequence",
       "instance_key": "Engraving+Sequence",
-      "name": "刻字 + 序列号",
+      "name": "刻字顺号",
       "command": [
         "{repo}/scripts/run-app.sh",
         "Engraving+Sequence"

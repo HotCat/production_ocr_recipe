@@ -267,9 +267,59 @@ The initial minimum date is 2026-11-17 00:00 UTC, so a fresh installation with a
 BIOS default date is rejected even before its first production run. With no
 network or trusted hardware clock this detects regression, **not** the absolute
 correct date, forward jumps, or deliberate deletion/restoration of state. Do not
-set the clock ahead: a subsequently corrected earlier date will remain blocked
-until it reaches the saved watermark. Never delete clock.sqlite3 to dismiss a
-time warning. The clock and history files must be preserved across deployments.
+set the clock ahead: a subsequently corrected earlier date requires the audited
+maintenance recovery below. Never delete clock.sqlite3 to dismiss a time warning.
+The clock and history files must be preserved across deployments.
+
+### 校时后恢复 / Recovery after correcting an advanced clock
+
+All guard comparisons use UTC epoch microseconds. Displaying `+08:00` changes
+only presentation; switching between UTC and Asia/Shanghai does not change the
+stored instant. If the actual OS clock was ahead (for example, BIOS/RTC local
+time interpreted as UTC), then corrected backward by NTP, the old future
+watermark will correctly block launches even though the current time is valid.
+`journalctl -u systemd-timesyncd` can distinguish this case from a display issue.
+
+First check the real date against a trusted source and fix Ubuntu/BIOS time.
+Ubuntu normally uses a UTC hardware clock: `timedatectl` should report the
+intended local timezone and `RTC in local TZ: no`. Keep the BIOS RTC convention
+consistent with Ubuntu; do not set UTC RTC to local wall time. Do not advance
+the OS clock simply to satisfy an incorrect saved watermark.
+
+Close all five production applications and the launcher. From the repository
+root, preview recovery using Ubuntu's synchronized network clock:
+
+```sh
+launcher/.venv/bin/python -m launcher.recover_clock \
+  --use-synchronized-system-time \
+  --reason 'NTP corrected an incorrectly advanced BIOS/RTC clock'
+```
+
+After reviewing the previous/current times, run the same command with `--apply`.
+This option requires `timedatectl` to report `NTPSynchronized=yes`; recovery is
+never called automatically by normal startup or merely because NTP is enabled.
+For an offline installation, verify the date independently and replace
+`--use-synchronized-system-time` with `--verified-time '2026-11-20T16:00:00+08:00'`
+using the **actual current time**, not that example. The supplied time must
+include a timezone and agree with the OS within 60 seconds. Time before the
+minimum supported date, missing/corrupt state, active apps, or backup failure
+refuse recovery. `--directory PATH` selects a nondefault production-log root.
+
+Recovery holds the application/writer locks, backs up all existing production
+databases using SQLite's backup API, and saves `recovery.json` under
+`~/.local/share/production-ocr/clock-recovery-backups/` (beside the selected log
+directory). In `clock.sqlite3`, `clock_recoveries` records the old watermark,
+old last-production time, verified current instant, reason, verification source
+and backup path. The new watermark is current time; last production resets to
+“校时后尚无生产记录” until the next verdict. The original last-production value
+remains in the audit and backup. Every original event and timestamp stays
+unchanged: a fixed eight-hour subtraction cannot reconstruct timestamps after
+multiple system clock jumps. The launcher shows a notice that history before
+recovery may have inaccurate times. Calendar searches still use saved dates.
+
+Reopen the launcher after recovery to clear its old in-memory time watermark
+and load the updated notice. All future clock-regression checks stay enabled,
+including the checks in the five compiled Haskell apps; no app rebuild is needed.
 
 For a consistent backup, close **all five apps and the launcher**, then copy the
 whole production-logs directory (including clock.sqlite3) to backup storage.
@@ -280,6 +330,52 @@ individually. Keep sufficient free space and back up this directory regularly.
 Development checks (all use temporary log data and no camera/PLC):
 
 ```sh
+scripts/test-production-logs.sh
+launcher/.venv/bin/python -m unittest discover -s launcher/tests -v
+```
+
+## Offline Modbus debug trigger
+
+In `~/.config/production-ocr-launcher/config.json`, add/edit the **top-level**
+boolean (alongside `schema_version`, not inside a program's `values`):
+
+```json
+"debug_mode": true
+```
+
+The default is `false`; old configuration files without the key also default to
+production mode. Save the file, click **重新读取配置** in the launcher (or restart
+it), and close/relaunch the OCR clients. Running clients keep their launch-time
+mode. The inspector identifies debug mode, with no operator switch for it.
+
+In all five clients, debug mode shows **触发modbus** beside **保存参数**. One
+accepted click submits one normal inspection of the current camera regions.
+Real camera capture, PaddleOCR when applicable, print guards, sequence checks,
+counters, and SQLite logging still run. It bypasses real Modbus initialization,
+reads and OK/NG writes entirely, so no PLC connection is required. A second
+click during an active cycle is rejected with a console message; after completion
+the same label may be inspected again. Invalid regions/missing codes produce NG
+rather than silently waiting for a successful decode. The four sequence clients
+require an initial sequence value/region; if missing, the console explains what
+to set before triggering. The comparator uses its normal preset-text matching.
+
+Debug events are retained in each client's normal SQLite database with
+`debug_mode=1`; launcher production history shows a **调试模式** column. Existing
+records migrate to `debug_mode=0` without losing data. Debug inspections advance
+counters and sequence numbers according to their results, and the production
+clock checks remain active. Restore the appropriate starting number after tests.
+Set `debug_mode` back to `false`, reload the launcher, and restart the clients to
+hide the button and resume PLC operation. Debug history is not deleted.
+
+The launcher always passes `OCR_DEBUG_MODE=1` or `0` explicitly, overriding any
+inherited or per-program value. Direct developer runs bypass launcher JSON;
+use `OCR_DEBUG_MODE=1 scripts/run-app.sh 'Barcode+Sequence'` explicitly for debug
+(default when unset is production). No other developer flag enables it.
+
+Hardware-free regression checks:
+
+```sh
+scripts/test-debug-modbus.sh
 scripts/test-production-logs.sh
 launcher/.venv/bin/python -m unittest discover -s launcher/tests -v
 ```

@@ -8,6 +8,8 @@
 
 module Barcode where
 
+import qualified ProductionDebug as PD
+
 import Data.Word
 import Data.Char
 import BarcodeGuard
@@ -70,7 +72,7 @@ C.verbatim [r|
 
 
 modbusInit :: IO ()
-modbusInit = do
+modbusInit = if PD.debugMode then putStrLn "[调试] Modbus模拟模式：不连接控制器，使用触发modbus按钮" else do
  [CU.block| void {
    // set slave id
    mb.modbus_set_slave_id(modbusSetting("BARCODE_SEQUENCE_MODBUS_SLAVE", 3, 247));
@@ -80,14 +82,20 @@ modbusInit = do
 
 
 modbusOk :: IO ()
-modbusOk = do
+modbusOk = if PD.debugMode then do
+  putStrLn "[调试] 模拟PLC输出 OK（未写入控制器）"
+  PD.finishDebugTrigger
+ else do
  [CU.block| void {
    mb.modbus_write_register(4, 99);
  }|]
 
 
 modbusNg :: IO ()
-modbusNg = do
+modbusNg = if PD.debugMode then do
+  putStrLn "[调试] 模拟PLC输出 NG（未写入控制器）"
+  PD.finishDebugTrigger
+ else do
  [CU.block| void {
    mb.modbus_write_register(2, 88);
  }|]
@@ -96,7 +104,7 @@ modbusNg = do
 -- Read the trigger independently from decoding, so the same captured label
 -- can be inspected once without blocking the GUI on OCR.
 modbusTriggered :: IO Bool
-modbusTriggered = (/= 0) <$> [C.block| int {
+modbusTriggered = if PD.debugMode then PD.consumeDebugTrigger else (/= 0) <$> [C.block| int {
   uint16_t registers[1] = {0};
   mb.modbus_read_holding_registers(0, 1, registers);
   return registers[0] == 77 ? 1 : 0;
@@ -239,6 +247,27 @@ queueBarcodeInspectionWith inspect runtime enabled triggered decoded image = do
       when (label /= Nothing && label /= previous) $ do
         task <- async (inspect enabled image)
         writeIORef (barcodePending runtime) (Just task)
+
+-- A debug click owns one actual image/ROI failure and never waits for a
+-- decoded preview string. Missing barcode and invalid ROI must produce NG too.
+queueDebugBarcodeInspection :: BarcodeRuntime -> Bool -> Bool
+                            -> Either String (Mat ('S ['D, 'D]) ('S 3) ('S Word8)) -> IO ()
+queueDebugBarcodeInspection = queueDebugBarcodeInspectionWith inspectBarcode
+
+-- Injecting only the recognizer lets tests exercise the actual trigger queue
+-- without a camera or OCR service. Each accepted click owns a fresh result,
+-- including invalid ROI failures and the same decoded barcode on a later click.
+queueDebugBarcodeInspectionWith :: (Bool -> image -> IO BarcodeResult)
+                                -> BarcodeRuntime -> Bool -> Bool -> Either String image -> IO ()
+queueDebugBarcodeInspectionWith inspect runtime enabled triggered image = when triggered $ do
+  pending <- readIORef (barcodePending runtime)
+  case pending of
+    Just _ -> PD.finishDebugTrigger
+    Nothing -> do
+      task <- async $ case image of
+        Left reason -> pure (BarcodeResult enabled BarcodeReadError "" "" reason)
+        Right snapshot -> inspect enabled snapshot
+      writeIORef (barcodePending runtime) (Just task)
 
 -- Setting changes invalidate the latch, so the current label is inspected again
 -- under the new setting. An older unguarded result is rejected by decideProduction.

@@ -20,12 +20,31 @@ tryInspection enabled action = E.catch action $ \failure ->
 
 inspectBarcodePairWith :: (Bool -> image -> IO BarcodeResult)
                       -> Bool -> Bool -> image -> Either String image -> IO BarcodePairResult
-inspectBarcodePairWith inspect productGuard packagingGuard productImage packagingImage = do
-  productResult <- tryInspection productGuard (inspect productGuard productImage)
-  packagingResult <- case packagingImage of
-    Left reason -> pure (BarcodeResult packagingGuard BarcodeReadError "" "" reason)
-    Right image -> tryInspection packagingGuard (inspect packagingGuard image)
-  pure (BarcodePairResult productResult packagingResult)
+inspectBarcodePairWith inspect productGuard packagingGuard productImage packagingImage =
+  inspectBarcodeRegionsWith inspect productGuard packagingGuard (Right productImage) packagingImage
+
+inspectBarcodeRegionsWith :: (Bool -> image -> IO BarcodeResult)
+                          -> Bool -> Bool -> Either String image -> Either String image -> IO BarcodePairResult
+inspectBarcodeRegionsWith inspect productGuard packagingGuard productImage packagingImage =
+  BarcodePairResult <$> region productGuard productImage <*> region packagingGuard packagingImage
+  where
+    region enabled image = case image of
+      Left reason -> pure (BarcodeResult enabled BarcodeReadError "" "" reason)
+      Right snapshot -> tryInspection enabled (inspect enabled snapshot)
+
+-- Debug pulses inspect both current ROIs even when decoding is empty, and may
+-- inspect the same label again. Never overwrite an in-flight pair.
+queueDebugBarcodePairWith :: (Bool -> image -> IO BarcodeResult)
+                          -> BarcodePairRuntime image -> Bool -> Bool
+                          -> Either String image -> Either String image -> IO Bool
+queueDebugBarcodePairWith inspect runtime productGuard packagingGuard productImage packagingImage = do
+  pending <- readIORef (pairPending runtime)
+  case pending of
+    Just _ -> pure False
+    Nothing -> do
+      task <- async (inspectBarcodeRegionsWith inspect productGuard packagingGuard productImage packagingImage)
+      writeIORef (pairPending runtime) (Just (productGuard, packagingGuard, task))
+      pure True
 
 -- Compare decoded data verbatim. OCR whitespace normalization applies only
 -- inside each printed-text guard, never to the cross-barcode comparison.

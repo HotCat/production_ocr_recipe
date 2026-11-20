@@ -35,7 +35,7 @@ def display_time(microseconds: int | None) -> str:
 
 
 class ClockGuard:
-    """Never lower the watermark. Correction requires fixing the OS/BIOS clock."""
+    """Block rollback; only an explicit, backed-up maintenance recovery can reset it."""
     def __init__(self, directory: Path | None = None, now_us=None):
         self.directory = (directory or production_directory()).resolve()
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -71,13 +71,21 @@ class ClockGuard:
                 if now < minimum:
                     raise ClockError(f'系统日期时间异常，已禁止启动所有生产程序。\n当前时间：{display_time(now)}\n'
                                      f'已记录时间：{display_time(minimum)}\n上次生产：{display_time(production)}\n'
-                                     '请检查主板电池，校准 BIOS 和 Ubuntu 日期时间后重试。')
+                                     '请检查主板电池，校准 BIOS 和 Ubuntu 日期时间后重试。\n'
+                                     '若 Ubuntu/NTP 已将错误的未来时间校准回正确时间，须由维护人员执行时间记录恢复；'
+                                     '请勿删除数据库或将系统时间调到未来。参见 launcher/README.md「校时后恢复」。')
                 if persist:
                     connection.execute('UPDATE clock_state SET high_water_us=? WHERE id=1', (now,))
                     connection.commit()
                     self.last_persisted = now
                 self.last_observed = now
-                return {'high_water_us': max(latest, now), 'last_production_us': production}
+                recovery = None
+                if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='clock_recoveries'").fetchone():
+                    connection.row_factory = sqlite3.Row
+                    row = connection.execute('SELECT * FROM clock_recoveries ORDER BY id DESC LIMIT 1').fetchone()
+                    recovery = dict(row) if row else None
+                return {'high_water_us': max(latest, now), 'last_production_us': production,
+                        'clock_recovery': recovery}
         except sqlite3.Error as error:
             raise ClockError(f'无法读取/保存生产时间，已禁止启动：{error}') from error
 

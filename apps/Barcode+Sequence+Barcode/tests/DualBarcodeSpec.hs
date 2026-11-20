@@ -37,6 +37,20 @@ main = do
   assert "disabled product guard does not disable packaging guard" (rejected (decideBarcodePair False True expected packagingBad))
   putStrLn "PASS: verbatim comparison, independent guards, stale settings and continuity"
 
+  debugRuntime <- newBarcodePairRuntime
+  let debugInspect enabled _ = pure (accepted enabled code)
+  forM_ [1..2 :: Int] $ \_ -> do
+    queued <- queueDebugBarcodePairWith debugInspect debugRuntime True True (Right ()) (Right ())
+    assert "next debug click accepts identical pair" queued
+    queueDebugBarcodePairWith debugInspect debugRuntime True True (Right ()) (Right ()) >>= assert "pending pair never overwritten" . not
+    outcome <- waitResult debugRuntime
+    assert "debug pair uses normal production verdict" (decideBarcodePair True True expected outcome == SequenceMatched)
+    pollBarcodePair debugRuntime >>= assert "one pair completion per click" . (== Nothing)
+  _ <- queueDebugBarcodePairWith debugInspect debugRuntime True True (Left "invalid product ROI") (Left "invalid packaging ROI")
+  invalidDebug <- waitResult debugRuntime
+  assert "both invalid debug regions complete NG" (barcodeVerdict (productBarcode invalidDebug) == BarcodeReadError && barcodeVerdict (packagingBarcode invalidDebug) == BarcodeReadError)
+  putStrLn "PASS: debug pair repeats, busy rejection, single completion and invalid ROIs"
+
   calls <- newIORef []
   let inspect enabled image = do
         modifyIORef' calls (++ [(enabled,image)])

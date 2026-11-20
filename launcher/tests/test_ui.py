@@ -89,6 +89,18 @@ class LauncherUiTests(unittest.TestCase):
         self.assertFalse(self.window.launch_button.isEnabled())
         self.assertFalse(self.window.save_button.isEnabled())
 
+    def test_debug_config_reload_and_save_preserve_flag(self):
+        self.assertNotIn('调试模式', self.window.identity_label.text())
+        config = copy.deepcopy(self.store.data)
+        config['debug_mode'] = True
+        self.store.path.write_text(json.dumps(config, ensure_ascii=False))
+        self.window.reload_button.click()
+        self.assertIn('调试模式', self.window.identity_label.text())
+        self.assertNotIn('debug_mode', self.window.editors)
+        self.window.editors['modbus_host'].setText('10.0.0.20')
+        self.window.save_button.click()
+        self.assertIs(ConfigStore(self.store.path).load()['debug_mode'], True)
+
     def test_invalid_ip_blocks_launch_and_preserves_file(self):
         original = self.store.path.read_bytes()
         self.window.editors['modbus_host'].setText('300.0.0.1')

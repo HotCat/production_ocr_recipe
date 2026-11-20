@@ -24,6 +24,7 @@ module ObjectBehavior (
 ) where
 
 import qualified ProductionLog as PL
+import qualified ProductionDebug as PD
 import BankRecipes (bankRecipes, bankRecipe)
 
 import           FRP.Yampa
@@ -601,7 +602,7 @@ overLord' g runtime sg = proc oi -> do
                                                  (decideProduction enabled expected) inspection
                             case decision of
                               ProductionRejected reason -> reject reason
-                              SequenceUnconfigured -> setBarcodeProductionBusy runtime False
+                              SequenceUnconfigured -> PD.finishDebugTrigger >> setBarcodeProductionBusy runtime False
                               SequenceMismatched -> reject "顺号不连续"
                               SequenceMatched -> do
                                 -- Continue with the existing engraving comparison
@@ -609,13 +610,13 @@ overLord' g runtime sg = proc oi -> do
                                 ocrState $=! OcrPending
                                 chkSer $=! Just curSerial
 
-                        serM = do
+                        serM = when (os == OcrPass || os == OcrFail) $ PD.withDebugVerdict $ do
                           case os of
                             OcrPass -> do
                               enabled <- get guardSetting
                               if maybe False (guardAllowsResult enabled) inspection then do
                                 case seq of
-                                  Nothing -> return ()
+                                  Nothing -> when PD.debugMode $ reject "检测期间起始号已被清除"
                                   Just marker -> do
                                     logVerdict True "条码及刻字检测通过"
                                     refSeq $=! Just (marker {serBody = serBody marker + (if b11 then -1 else 1)})
@@ -903,6 +904,20 @@ saveConfig' sg = proc oi -> do
                   let FontSet{..} = fontSet
                   pushFont msyhlFont
                   clicked <- button "保存参数"
+                  when PD.debugMode $ do
+                    sameLine
+                    debugClicked <- button "触发modbus"
+                    when debugClicked $ do
+                      debugControls <- get ctrlMaps
+                      let (Just (ChanHub2 debugMessages)) = Map.lookup "barcode-ocr-collect-batch" debugControls
+                      let (Just (CompHub1 markerRef)) = Map.lookup "serial-number-sequence-marker" debugControls
+                      marker <- get markerRef
+                      if isJust marker then do
+                        accepted <- PD.requestDebugTrigger
+                        atomically $ writeTChan debugMessages $
+                          if accepted then "[调试] 已提交模拟Modbus触发，执行完整生产检测\n"
+                                      else "[调试] 上一次检测尚未结束，请等待结果后重试\n"
+                      else atomically $ writeTChan debugMessages "[调试] 请先设置起始号及顺号区域，再触发检测\n"
                   sameLine
                   showHelp msyhlFont "保存当前配置的所有参数，如果临时调整了参数，想进行快速还原，可以按x键"
                   when clicked $ do
@@ -1007,7 +1022,8 @@ barcodeOCR' runtime sg = proc oi -> do
                   case completed of
                     Nothing -> return ()
                     Just inspection -> do
-                      if barcodeGuardEnabled inspection /= guardEnabled then
+                      if barcodeGuardEnabled inspection /= guardEnabled then do
+                        PD.finishDebugTrigger
                         atomically $ writeTChan collect_batch "[结果已丢弃] 印字校验设置已改变，重新检测当前标签\n"
                       else do
                         atomically $ writeTChan collect_batch (formatBarcodeResult inspection)
@@ -1032,17 +1048,19 @@ barcodeOCR' runtime sg = proc oi -> do
 
                   let subRect = toRect $ HRect (V2 ((round x)+(round b40)) ((round y)+(round b41))) (V2 (round (w/b10)) (round (h/b10)))
                       r = runExcept $ cvtColor rgb bgr (matFlip src FlipVertically) >>= (flip matSubRect) subRect >>= (\img-> return $ matFlip (matTranspose img) FlipVertically) >>= cvtColor bgr rgb >>= resize (ResizeRel $ pure (realToFrac b11)) InterLinear
+                  triggered <- modbusTriggered
+                  when PD.debugMode $ queueDebugBarcodeInspection runtime guardEnabled triggered $
+                    either (const (Left "条码识别区域无效，请重新选择")) Right r
                   case r of
                     Left _ -> do
                       tr $=! Nothing
-                      queueBarcodeInspection runtime guardEnabled False "ng" src
+                      unless PD.debugMode $ queueBarcodeInspection runtime guardEnabled False "ng" src
                     Right labelImage -> do
                       -- Decode only for the live range-selection preview. The
                       -- asynchronous inspection is the production authority.
                       decoded <- decodeBarcode labelImage
                       tr $=! (if decoded == "ng" then Nothing else Just decoded)
-                      triggered <- modbusTriggered
-                      queueBarcodeInspection runtime guardEnabled triggered decoded labelImage
+                      unless PD.debugMode $ queueBarcodeInspection runtime guardEnabled triggered decoded labelImage
 
                   when (isEvent b21') $ do
                       let subRect = toRect $ HRect (V2 ((round x)+(round b40)) ((round y)+(round b41))) (V2 (round (w/b10)) (round (h/b10)))

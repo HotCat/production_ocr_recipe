@@ -24,6 +24,7 @@ module ObjectBehavior (
 ) where
 
 import qualified ProductionLog as PL
+import qualified ProductionDebug as PD
 
 import RuntimePaths
 import EngravingCompare
@@ -543,6 +544,16 @@ saveConfig' sg = proc oi -> do
                   pushFont msyhlFont
                   separator
                   clicked <- button "保存参数"
+                  when PD.debugMode $ do
+                    sameLine
+                    debugClicked <- button "触发modbus"
+                    when debugClicked $ do
+                      debugControls <- get ctrlMaps
+                      let (Just (ChanHub2 debugMessages)) = Map.lookup "serial-number-ocr-collect-batch" debugControls
+                      accepted <- PD.requestDebugTrigger
+                      atomically $ writeTChan debugMessages $
+                        if accepted then "[调试] 已提交模拟Modbus触发，执行完整生产检测\n"
+                                    else "[调试] 上一次检测尚未结束，请等待结果后重试\n"
                   sameLine
                   showHelp msyhlFont "保存当前配置的所有参数，如果临时调整了参数，想进行快速还原，可以按x键"
                   when clicked $ do
@@ -694,7 +705,9 @@ serialNumOCR' runtime sg = proc oi -> do
                         if queued then do
                           when production $ ocrState $=! OcrPending
                           atomically $ writeTChan collect "[检测] 已提交刻字与预设文字比对\n"
-                        else atomically $ writeTChan collect "[忙] 上一次检测尚未完成，请等待结果后重新触发\n"
+                        else do
+                          when production PD.finishDebugTrigger
+                          atomically $ writeTChan collect "[忙] 上一次检测尚未完成，请等待结果后重新触发\n"
                   triggered <- (== "ok") <$> modbusTrigger
                   rising <- triggerRising runtime triggered
                   when (rising || isEvent b21') $ submitInspection True

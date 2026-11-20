@@ -97,8 +97,11 @@ bindings, process lifetime and desktop installation.
 Use an existing compatible service by setting `PADDLEOCR_ENDPOINT`, or create a
 separate Python environment from [services/paddleocr_service/README.md](services/paddleocr_service/README.md).
 Models are downloaded/prepared separately and are not committed. Multiple
-clients share one service; its ZeroMQ REP loop queues requests and executes one
-PaddleOCR inference at a time. A client reply timeout includes queue time.
+clients share one service; its ZeroMQ broker routes requests to two independent
+CPU model workers, with at most two inferences running concurrently. Additional
+requests wait for a free worker. Each worker defaults to two CPU threads;
+`PADDLEOCR_WORKERS=1` selects serial fallback. A client reply timeout includes
+queue time.
 
 ```sh
 services/paddleocr_service/run.sh

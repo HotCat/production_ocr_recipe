@@ -47,6 +47,28 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(spec['environment']['GUARD'], '0')
         self.assertEqual(spec['environment']['MODE'], 'B')
 
+    def test_debug_flag_is_config_only_strict_and_authoritative(self):
+        self.assertIs(self.config['debug_mode'], False)
+        for enabled in (False, True):
+            config = copy.deepcopy(self.config)
+            config['debug_mode'] = enabled
+            for program in config['programs']:
+                program['environment'] = {'OCR_DEBUG_MODE': '0' if enabled else '1'}
+                self.assertEqual(launch_spec(config, program)['environment']['OCR_DEBUG_MODE'], '1' if enabled else '0')
+            self.store.update(config)
+            self.assertIs(ConfigStore(self.path).load()['debug_mode'], enabled)
+        legacy = copy.deepcopy(self.config)
+        legacy.pop('debug_mode')
+        validate_config(legacy)
+        self.assertEqual(launch_spec(legacy, legacy['programs'][0])['environment']['OCR_DEBUG_MODE'], '0')
+        for invalid in ('true', 'false', 0, 1, None, []):
+            config = copy.deepcopy(self.config)
+            config['debug_mode'] = invalid
+            with self.assertRaisesRegex(ValueError, 'debug_mode'):
+                validate_config(config)
+            with self.assertRaisesRegex(ValueError, 'debug_mode'):
+                launch_spec(config, config['programs'][0])
+
     def test_invalid_addresses_do_not_replace_saved_configuration(self):
         before = self.path.read_bytes()
         for address in ['', '192.168.1.999', '127.0.0.1;echo invalid', 'localhost']:

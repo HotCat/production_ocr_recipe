@@ -8,6 +8,8 @@
 
 module Barcode where
 
+import qualified ProductionDebug as PD
+
 import Data.Word
 import Data.Char
 import Foreign.C.Types
@@ -59,7 +61,7 @@ C.verbatim [r|
 
 
 modbusInit :: IO ()
-modbusInit = do
+modbusInit = if PD.debugMode then putStrLn "[调试] Modbus模拟模式：不连接控制器，使用触发modbus按钮" else do
  [CU.block| void {
    // set slave id
    mb.modbus_set_slave_id(modbusSetting("SEQUENCE_MODBUS_SLAVE", 3, 247));
@@ -69,21 +71,30 @@ modbusInit = do
 
 
 modbusOk :: IO ()
-modbusOk = do
+modbusOk = if PD.debugMode then do
+  putStrLn "[调试] 模拟PLC输出 OK（未写入控制器）"
+  PD.finishDebugTrigger
+ else do
  [CU.block| void {
    mb.modbus_write_register(4, 99);
  }|]
 
 
 modbusNg :: IO ()
-modbusNg = do
+modbusNg = if PD.debugMode then do
+  putStrLn "[调试] 模拟PLC输出 NG（未写入控制器）"
+  PD.finishDebugTrigger
+ else do
  [CU.block| void {
    mb.modbus_write_register(2, 88);
  }|]
 
 
 modbusTrigger :: IO String
-modbusTrigger = do
+modbusTrigger = if PD.debugMode then do
+  triggered <- PD.consumeDebugTrigger
+  pure (if triggered then "ok" else "ng")
+ else do
   [CU.block| char* {
     uint16_t read_holding_regs[16];
     read_holding_regs[0] = 0;

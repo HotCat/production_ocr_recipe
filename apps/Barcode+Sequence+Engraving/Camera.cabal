@@ -12,6 +12,7 @@ executable Camera
     Main.hs
   Other-Modules:
     ProductionLog
+    ProductionDebug
     BankRecipes
     Parser
     Animate
@@ -62,6 +63,7 @@ executable Camera
     , template-haskell
     , filepath
     , sqlite-simple
+    , unix
 
   default-language: Haskell2010
 

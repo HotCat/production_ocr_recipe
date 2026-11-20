@@ -12,6 +12,7 @@ executable Camera
     Main.hs
   Other-Modules:
     ProductionLog
+    ProductionDebug
     Parser
     Animate
     IdentityList
@@ -62,6 +63,7 @@ executable Camera
     , process
     , template-haskell
     , sqlite-simple
+    , unix
     , mwc-random
     , filepath
     , regex-tdfa

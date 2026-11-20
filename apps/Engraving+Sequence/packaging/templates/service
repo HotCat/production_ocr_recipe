@@ -1,5 +1,5 @@
 [Unit]
-Description=Shared serial CPU PaddleOCR service
+Description=Shared two-worker CPU PaddleOCR service
 After=network.target
 
 [Service]

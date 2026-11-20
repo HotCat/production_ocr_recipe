@@ -220,6 +220,20 @@ main99 = do
 
 main :: IO ()
 main = do
+  args <- getArgs
+  case args of
+    [] -> mainGui
+    ["--ocr-image", path] -> do
+      encoded <- B.readFile path
+      let image = unsafeCoerceMat (OpenCV.imdecode OpenCV.ImreadColor encoded)
+      ocr <- prepareOcr
+      predictOcr image ocr >>= putStrLn
+    ["--help"] -> putStrLn "Usage: Camera [--ocr-image IMAGE]\nPADDLEOCR_ENDPOINT defaults to tcp://127.0.0.1:5555; PADDLEOCR_TIMEOUT_MS defaults to 120000."
+    _ -> die "Usage: Camera [--ocr-image IMAGE]"
+
+-- Headless OCR diagnostics above intentionally bypass camera/PLC/log startup.
+mainGui :: IO ()
+mainGui = do
   PL.initializeProductionLog "Engraving+Sequence"
   modbusInit
   runtimeDir <- getRuntimeDirectory

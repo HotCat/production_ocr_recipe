@@ -56,6 +56,8 @@ For clients on different PCs, set the OCR host's actual LAN address in
 PADDLEOCR_BIND=tcp://192.168.0.10:5555
 PADDLEOCR_DEVICE=cpu
 PADDLEOCR_LANG=en
+PADDLEOCR_WORKERS=2
+PADDLEOCR_CPU_THREADS=2
 ```
 
 Then run `sudo systemctl restart paddleocr-service`. The bind address must exist
@@ -70,12 +72,16 @@ journalctl -u paddleocr-service -f
 paddleocr-service --check
 ```
 
-Wait for `PaddleOCR service listening ...; one model, serial inference` before
+Wait for `PaddleOCR service listening ...; 2 model workers, CPU threads per worker=2` before
 requesting OCR. An older source-tree user service may already own port 5555;
 stop that particular old service before starting the installed replacement.
 The new .deb conflicts with/replaces the old `engraving-sequence-ocr` package,
 so APT removes that old package on upgrade. Other clients can continue using the
 same endpoint and unchanged request/reply protocol.
+The service runs at most two independent model instances; additional requests
+wait for a free worker. Set `PADDLEOCR_WORKERS=1` for serial fallback. Each
+worker defaults to two CPU inference threads, controlled by
+`PADDLEOCR_CPU_THREADS` in the same settings file.
 
 ## Install clients separately
 
@@ -111,31 +117,31 @@ XWayland and the appropriate GPU driver. USB permissions and Hikvision
 userspace USB/GigE SDKs are included. Reconnect USB cameras after installation;
 configure the camera subnet for GigE. PCIe kernel drivers remain vendor-specific.
 
-## Concurrent submissions, serial PaddleOCR
+## Concurrent submissions, two PaddleOCR workers
 
-Every application can submit a request independently. ZeroMQ queues requests
-from its REQ connections and fair-queues ready peers into the one REP socket.
-The server owns one `PaddleEngine` and synchronously executes:
+Every application can submit a request independently. A ZeroMQ ROUTER broker
+dispatches to two spawned workers, each owning one `PaddleEngine` and executing:
 
 ```
 receive one request -> decode -> PaddleOCR.predict -> send that client's reply
 ```
 
-Only after sending the reply does it receive the next request. No worker pool
-or second model instance is created; at most one predict call is active. CPU
-threads used internally by Paddle are independent of request serialization.
-Replies are routed by ZeroMQ to the requesting socket. Per-connection order is
+Each worker receives its next request only after replying. At most two predict
+calls are active across the service; other clients wait until a worker is free.
+CPU threads used internally by Paddle are configured separately (two per worker
+by default). Replies are routed to the requesting socket. Per-connection order is
 preserved; no global ordering between simultaneous independent clients is
-promised. Both normal text and JSON recognition requests use this same loop.
-Health requests also wait behind an active inference request.
+promised. Both text and JSON recognition use the same worker pool. Health
+requests also wait for a free worker, and the pool starts serving only after
+both models initialize. A dead worker fails the pool so systemd can restart it.
 
 Each REQ socket permits one outstanding request. The Haskell client already
 creates a socket for each call and shares only the thread-safe ZeroMQ context.
 It now allows 120 seconds by default for a reply, including queue waiting time;
 set `PADDLEOCR_TIMEOUT_MS` from 1 through 3600000 as appropriate for the workload.
 Its send timeout remains five seconds. ZeroMQ send/receive high-water marks on
-the server are eight messages per connection; they apply backpressure rather
-than creating parallel inference. There is no unlimited throughput guarantee:
+the server are eight messages per connection; they apply backpressure when
+both workers are busy. There is no unlimited throughput guarantee:
 size timeouts for the sum of work ahead of a request plus its own inference.
 A client timeout/disconnect does not cancel work already accepted by the server;
 recreate a timed-out REQ socket rather than reusing it in an invalid state.

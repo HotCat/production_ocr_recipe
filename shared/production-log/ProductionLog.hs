@@ -9,6 +9,10 @@ module ProductionLog
   ) where
 
 import Control.Exception (bracket, mask, onException)
+import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import System.Posix.IO (openFd, closeFd, defaultFileFlags, OpenMode(ReadWrite), LockRequest(WriteLock), waitToSetLock)
+import System.IO (SeekMode(AbsoluteSeek))
+import qualified ProductionDebug as PD
 import Control.Monad (unless, when, void)
 import Data.Int (Int64)
 import Data.IORef
@@ -76,6 +80,21 @@ logDirectory = do
       dataHome <- fromMaybe (home </> ".local/share") <$> lookupEnv "XDG_DATA_HOME"
       pure (dataHome </> "production-ocr/production-logs")
 
+-- All five Haskell clients share an attached clock database. Serialize their
+-- connection setup/migration and short write transactions in a consistent order
+-- to avoid schema-lock deadlocks between concurrent SQLite ATTACH operations.
+-- POSIX releases this advisory lock on close/crash; the file is never deleted.
+-- MVar also covers threads in one process (fcntl locks are process-scoped).
+{-# NOINLINE writerMutex #-}
+writerMutex :: MVar ()
+writerMutex = unsafePerformIO (newMVar ())
+
+withWriterLock :: FilePath -> IO a -> IO a
+withWriterLock directory action = withMVar writerMutex $ \_ ->
+  bracket (openFd (directory </> "writer.lock") ReadWrite (Just 0o600) defaultFileFlags) closeFd $ \fd -> do
+    waitToSetLock fd (WriteLock, AbsoluteSeek, 0, 0)
+    action
+
 immediate :: Connection -> IO a -> IO a
 immediate connection action = mask $ \restore -> do
   execute_ connection "BEGIN IMMEDIATE"
@@ -102,14 +121,19 @@ withLog app action = do
     ioError (userError "Unknown production application")
   directory <- logDirectory
   createDirectoryIfMissing True directory
-  prepareClock directory
-  bracket (open (directory </> app ++ ".sqlite3")) close $ \connection -> do
-    execute_ connection "PRAGMA busy_timeout=10000"
-    execute_ connection "PRAGMA synchronous=FULL"
-    execute_ connection eventSchema
-    execute_ connection "CREATE INDEX IF NOT EXISTS production_events_date ON production_events(local_date, occurred_at_us, id)"
-    execute connection "ATTACH DATABASE ? AS guard" (Only (directory </> "clock.sqlite3"))
-    action connection
+  withWriterLock directory $ do
+    prepareClock directory
+    bracket (open (directory </> app ++ ".sqlite3")) close $ \connection -> do
+      execute_ connection "PRAGMA busy_timeout=10000"
+      execute_ connection "PRAGMA synchronous=FULL"
+      immediate connection $ do
+        execute_ connection eventSchema
+        columns <- query_ connection "SELECT name FROM pragma_table_info('production_events') WHERE name='debug_mode'" :: IO [Only String]
+        when (null columns) $
+          execute_ connection "ALTER TABLE production_events ADD COLUMN debug_mode INTEGER NOT NULL DEFAULT 0 CHECK(debug_mode IN (0,1))"
+        execute_ connection "CREATE INDEX IF NOT EXISTS production_events_date ON production_events(local_date, occurred_at_us, id)"
+      execute connection "ATTACH DATABASE ? AS guard" (Only (directory </> "clock.sqlite3"))
+      action connection
 
 checkedTime :: Connection -> IO UTCTime
 checkedTime connection = do
@@ -142,6 +166,6 @@ recordProduction event = withLog (eventApp event) $ \connection -> immediate con
         txt (eventDetected event), txt (eventPreset event), txt (eventBank event),
         optionalInt (eventBankIndex event), optionalInt (eventBankSerialLength event),
         optionalBoolean (eventGuard event), optionalBoolean (eventReverse event),
-        optionalBoolean (eventPackagingGuard event), txt (eventReason event)]
-  execute connection "INSERT INTO production_events(app, occurred_at_us, timestamp_utc, timestamp_local, local_date, result, barcode, packaging_barcode, serial_number, detected_text, preset_text, bank, bank_index, bank_serial_length, integrity_guard, reverse, packaging_integrity_guard, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" fields
+        optionalBoolean (eventPackagingGuard event), SQLInteger (if PD.debugMode then 1 else 0), txt (eventReason event)]
+  execute connection "INSERT INTO production_events(app, occurred_at_us, timestamp_utc, timestamp_local, local_date, result, barcode, packaging_barcode, serial_number, detected_text, preset_text, bank, bank_index, bank_serial_length, integrity_guard, reverse, packaging_integrity_guard, debug_mode, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" fields
   execute connection "UPDATE guard.clock_state SET last_production_us=? WHERE id=1" (Only micros)
