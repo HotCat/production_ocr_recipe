@@ -152,3 +152,21 @@ for fields, data locations, offline clock limits, backups and regression tests.
 The Haskell writer and SQL schemas are in `shared/production-log/`; keep that
 folder when copying or building this repository. Schemas are embedded in compiled
 clients, so deployed Haskell binaries do not require their source files.
+
+
+### Client CPU limits and profiling
+
+Each client binary is built with GHC RTS default `-N2`, limiting the Haskell
+runtime to two capabilities. `scripts/run-app.sh` also sets `GHCRTS=-N2` so an
+inherited shell setting cannot silently expand the client across all logical
+CPUs. On a constrained production line, use `OCR_RTS_CAPABILITIES=1` to run a
+client with one Haskell capability. This setting controls GHC scheduling and
+GC workers only. Each GUI client also sets OpenCV's native worker pool to **one
+thread**, independently of GHC. This eliminated excessive native worker CPU in
+the live barcode client (about 471% to 108% on the measured machine).
+
+`OCR_OPENCV_THREADS=1..16` overrides the native limit; `auto` restores OpenCV's
+machine-dependent default for diagnostic comparisons. `OCR_CPU_PROFILE=1`
+enables five-second frame/phase/GC timing reports in the runtime log. No frame
+rate or production trigger throttling is introduced. See
+[docs/CPU_PROFILING.md](docs/CPU_PROFILING.md) for measurements, scope and commands.

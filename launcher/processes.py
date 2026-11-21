@@ -149,11 +149,14 @@ def supervise(request: Path, descriptor: int) -> int:
     record, log_path = Path(payload["record"]), Path(payload["log"])
     handler = RotatingFileHandler(log_path, maxBytes=2 * 1024 * 1024, backupCount=2, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(message)s"))
+    # Pipe reads can end anywhere, even inside a timing line or UTF-8 character.
+    # Preserve the child's newlines instead of appending one after each chunk.
+    handler.terminator = ""
     logger = logging.getLogger("supervisor")
     logger.setLevel(logging.INFO)
     logger.addHandler(handler)
     # Leave previous logs available, marking each run with its actual timestamp.
-    logger.info("\n=== %s | %s ===", spec["name"], time.strftime("%Y-%m-%d %H:%M:%S"))
+    logger.info("\n=== %s | %s ===\n", spec["name"], time.strftime("%Y-%m-%d %H:%M:%S"))
     try:
         ClockGuard(Path(spec["environment"]["OCR_PRODUCTION_LOG_DIR"])).check(persist=True)
         environment = dict(os.environ, **spec.get("environment", {}))
@@ -177,11 +180,11 @@ def supervise(request: Path, descriptor: int) -> int:
         reader.start()
         exit_code = child.wait()
         reader.join(timeout=2)
-        logger.info("=== 程序结束，退出码 %s ===", exit_code)
+        logger.info("\n=== 程序结束，退出码 %s ===\n", exit_code)
         atomic_json(record, dict(initial, state="exited", exit_code=exit_code, ended_at=time.time()))
         return 0
     except Exception as error:
-        logger.exception("启动/监控失败")
+        logger.exception("启动/监控失败\n")
         atomic_json(record, dict(initial, state="failed", message=str(error), ended_at=time.time()))
         return 1
     finally:

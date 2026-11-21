@@ -16,6 +16,7 @@
 module Main where
 
 import qualified ProductionLog as PL
+import qualified RuntimePerformance as PF
 
 import           Codec.Picture
 import           Codec.Picture.Extra    (flipVertically)
@@ -220,6 +221,7 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
+    ["--runtime-info"] -> PF.initializeRuntime >> pure ()
     [] -> mainGui
     ["--ocr-image", path] -> do
       encoded <- B.readFile path
@@ -227,8 +229,8 @@ main = do
       TextRecog.textRecog2 image >>= putStrLn
     ["--barcode-image", path] -> checkBarcodeImage False path
     ["--barcode-image", path, "--guard"] -> checkBarcodeImage True path
-    ["--help"] -> putStrLn "Usage: Camera [--ocr-image IMAGE | --barcode-image IMAGE [--guard]]\nPADDLEOCR_ENDPOINT defaults to tcp://127.0.0.1:5555; PADDLEOCR_TIMEOUT_MS defaults to 120000."
-    _ -> die "Usage: Camera [--ocr-image IMAGE | --barcode-image IMAGE [--guard]]"
+    ["--help"] -> putStrLn "Usage: Camera [--runtime-info | --ocr-image IMAGE | --barcode-image IMAGE [--guard]]\nPADDLEOCR_ENDPOINT defaults to tcp://127.0.0.1:5555; PADDLEOCR_TIMEOUT_MS defaults to 120000."
+    _ -> die "Usage: Camera [--runtime-info | --ocr-image IMAGE | --barcode-image IMAGE [--guard]]"
 
 -- Label acceptance can be checked without a camera, window, or PLC.
 checkBarcodeImage :: Bool -> FilePath -> IO ()
@@ -241,6 +243,7 @@ checkBarcodeImage enabled path = do
 
 mainGui :: IO ()
 mainGui = do
+  performance <- PF.initializeRuntime
   PL.initializeProductionLog "Barcode+Sequence"
   modbusInit
   createDirectoryIfMissing False "/dev/shm/sequence"
@@ -408,10 +411,10 @@ mainGui = do
         barcodeRuntime <- newBarcodeRuntime
 
         reactimate init
-                   getTimeInput
+                   (\refresh -> PF.measure performance "input" (getTimeInput refresh))
                    (\_ (a,b,c,d,e,f,g,h,i,j) -> do
                        shouldClose <- windowShouldClose window
-                       runState <- runExceptT $ do
+                       runState <- PF.measure performance "frp+bindings" $ runExceptT $ do
                          -- LSV.setVar env "dear-rout-1" (Vision (Individual ((force a `seq` a) env shaderProgram ctrlMaps fontSet >> mv_emptyMat)))
                          -- LSV.setVar env "dear-rout-2" (Vision (Individual ((force b `seq` b) env ctrlMaps fontSet >> mv_emptyMat)))
                          -- LSV.setVar env "dear-rout-3" (Vision (Individual ((force c `seq` c) env ctrlMaps fontSet >> mv_emptyMat)))
@@ -429,9 +432,9 @@ mainGui = do
                          LSV.setVar env "dear-rout-4" (Vision (Individual ((force d `seq` d) env)))
                          LSV.setVar env "dear-rout-5" (Vision (Individual ((force e `seq` e) env ctrlMaps fontSet)))
                          LSV.setVar env "dear-rout-6" (Vision (Individual ((force f `seq` f) env ctrlMaps fontSet)))
-                         LSV.setVar env "dear-rout-7" (Vision (DaisyChain ((force g `seq` g) env ctrlMaps fontSet)))
-                         LSV.setVar env "dear-rout-8" (Vision (DaisyChain ((force h `seq` h) env ctrlMaps fontSet)))
-                         LSV.setVar env "dear-rout-9" (Vision (DaisyChain ((force i `seq` i) env ctrlMaps fontSet)))
+                         LSV.setVar env "dear-rout-7" (Vision (DaisyChain (\frame -> PF.measure performance "barcode" ((force g `seq` g) env ctrlMaps fontSet frame))))
+                         LSV.setVar env "dear-rout-8" (Vision (DaisyChain (\frame -> PF.measure performance "image-filter" ((force h `seq` h) env ctrlMaps fontSet frame))))
+                         LSV.setVar env "dear-rout-9" (Vision (DaisyChain (\frame -> PF.measure performance "serial" ((force i `seq` i) env ctrlMaps fontSet frame))))
                          LSV.setVar env "dear-rout-10" (Vision (Individual ((force j `seq` j) env ctrlMaps fontSet)))
 
                        openGL3NewFrame
@@ -454,22 +457,23 @@ mainGui = do
                        pushFont msyhlFont
                        bracket_ (begin "参数设置") end do
 
-                         withFile "/dev/shm/sequence/fun.scm" ReadMode $ \handle -> do
+                         PF.measure performance "script+vision" $ withFile "/dev/shm/sequence/fun.scm" ReadMode $ \handle -> do
                            xs <- hGetContents handle
                            r <- LSC.evalString env xs
                            when (take 27 r == "An internal error occurred:") $ void $ LSC.evalString env "(set! mycam 0)"
 
                        popFont
 
-                       render2 env shaderProgram vaoPtr containerPtr awesomeFacePtr window
+                       PF.measure performance "display-upload" $ render2 env shaderProgram vaoPtr containerPtr awesomeFacePtr window
 
                        showDemoWindow
 
                        -- glClear GL_COLOR_BUFFER_BIT
                        render
-                       openGL3RenderDrawData =<< getDrawData
-                       swapBuffers window
+                       PF.measure performance "imgui-draw" $ openGL3RenderDrawData =<< getDrawData
+                       PF.measure performance "present" $ swapBuffers window
                        pollEvents
+                       PF.endFrame performance
                        if shouldClose == True
                          then do
                            dir <- getHomeDirectory

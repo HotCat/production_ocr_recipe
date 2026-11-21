@@ -379,3 +379,36 @@ scripts/test-debug-modbus.sh
 scripts/test-production-logs.sh
 launcher/.venv/bin/python -m unittest discover -s launcher/tests -v
 ```
+
+
+### Client CPU capabilities
+
+Every PaddleOCR request now prints one timing entry to **运行日志**, without
+enabling CPU profiling:
+
+```text
+[PaddleOCR] status=OK request_ms=123.456
+```
+
+`request_ms` is elapsed wall time in milliseconds for the complete client
+request: image encoding, service queue/network waits, inference and reply
+decoding. It is not an isolated measurement of the model's inference time.
+Statuses are `OK`, `EMPTY`, `ERROR` (including timeouts) and `CANCELLED`.
+Errors still follow the application's existing NG/error handling. Timing goes
+to stderr, which the launcher captures alongside normal console output, while
+headless OCR command stdout continues to contain only the recognized text.
+
+The five Haskell clients use two GHC RTS capabilities by default. The launcher
+starts them through `scripts/run-app.sh`, which explicitly sets `GHCRTS=-N2` and
+therefore ignores an inherited unlimited `GHCRTS` value. For a lower-power
+machine, set `OCR_RTS_CAPABILITIES=1` before launching; values other than `1` or
+`2` are rejected. This cap applies to Haskell scheduling and garbage collection.
+All five clients separately default OpenCV to one native thread before opening
+the camera. `OCR_OPENCV_THREADS=1..16` overrides that setting; `auto` restores
+OpenCV's machine-dependent default for diagnosis.
+
+To investigate a client, add `"OCR_CPU_PROFILE": "1"` to its `environment` in
+the launcher configuration before its next launch. Five-second reports appear
+in its runtime log; remove the setting after diagnosis. This does not change
+camera settings, inspection rules or trigger polling. See
+[CPU profiling](../docs/CPU_PROFILING.md) for live results and timing limitations.

@@ -32,6 +32,7 @@ import OpenCV.TypeLevel
 import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
 import Control.Monad
+import OcrTiming (timeOcrRequest)
 import Control.Monad.Trans.Except (Except)
 import Control.Concurrent.STM
 import qualified Control.Exception as E
@@ -100,7 +101,7 @@ prepareOcr = PPOCR . fromMaybe "tcp://127.0.0.1:5555" <$> lookupEnv "PADDLEOCR_E
 
 -- Use the shared service through the endpoint prepared at startup.
 predictOcr :: (Mat ('S ['D, 'D]) ('S 3) ('S Word8)) -> PPOCR -> IO String
-predictOcr img ocr = do
+predictOcr img ocr = timeOcrRequest $ do
   let endpoint = ppoEndpoint ocr
   -- A safe FFI call lets other Haskell threads run while ZeroMQ waits.
   let request = withPtr img $ \imgPtr -> withCString endpoint $ \endpointPtr ->

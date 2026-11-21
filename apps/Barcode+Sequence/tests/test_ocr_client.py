@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import subprocess
 import tempfile
 import threading
@@ -21,11 +22,14 @@ import zmq
 def peer(reply, delay=0):
     ready = queue.Queue()
     errors = []
+    done = threading.Event()
 
     def serve():
         try:
             with zmq.Context() as context, context.socket(zmq.REP) as socket:
-                socket.setsockopt(zmq.LINGER, 0)
+                # Let queued replies reach the client before this one-shot
+                # mock closes. LINGER=0 can discard even a successful send.
+                socket.setsockopt(zmq.LINGER, 1000)
                 socket.setsockopt(zmq.RCVTIMEO, 10000)
                 port = socket.bind_to_random_port('tcp://127.0.0.1')
                 ready.put(f'tcp://127.0.0.1:{port}')
@@ -36,6 +40,9 @@ def peer(reply, delay=0):
                 assert image is not None and image.shape == (140, 600, 3)
                 time.sleep(delay)
                 socket.send(reply)
+                # Keep the one-shot peer connected until the client has read
+                # its reply; socket.send only queues it for transmission.
+                done.wait(timeout=150)
         except Exception as error:
             errors.append(error)
 
@@ -44,6 +51,7 @@ def peer(reply, delay=0):
     try:
         yield ready.get(timeout=10)
     finally:
+        done.set()
         thread.join(timeout=12)
         assert not thread.is_alive(), 'mock service did not finish'
         if errors:
@@ -72,19 +80,34 @@ def main():
             return subprocess.run([binary, '--ocr-image', paths[text]], env=environment,
                                   capture_output=True, text=True, timeout=150)
 
-        with peer('中文 SERIAL 123456'.encode('utf-8')) as endpoint:
+        def timing(result, expected):
+            matches = re.findall(r'^\[PaddleOCR\] status=(\w+) request_ms=(\d+\.\d+)$',
+                                 result.stderr, re.MULTILINE)
+            assert len(matches) == 1 and matches[0][0] == expected, result
+            return float(matches[0][1])
+
+        with peer('中文 SERIAL 123456'.encode('utf-8'), delay=0.12) as endpoint:
             result = recognize(endpoint)
             assert result.returncode == 0 and result.stdout.strip() == '中文 SERIAL 123456', result
-        print('PASS: multipart PNG request and UTF-8 reply')
+            assert timing(result, 'OK') >= 100, result
+        print('PASS: multipart PNG request, UTF-8 reply and elapsed timing including service delay')
+
+        with peer(b'') as endpoint:
+            result = recognize(endpoint)
+            assert result.returncode == 0 and result.stdout.strip() == '', result
+            timing(result, 'EMPTY')
+        print('PASS: empty OCR replies retain their result and report timing')
 
         with peer(b'ERROR: test inference failure') as endpoint:
             result = recognize(endpoint)
             assert result.returncode != 0 and 'test inference failure' in result.stderr, result
+            timing(result, 'ERROR')
         print('PASS: service errors propagate as failures')
 
         with peer(b'late reply', delay=0.5) as endpoint:
             result = recognize(endpoint, timeout_ms=100)
             assert result.returncode != 0 and 'timed out waiting' in result.stderr, result
+            assert timing(result, 'ERROR') >= 90, result
         print('PASS: configured reply timeout')
 
         invalid = Path(directory) / 'invalid.png'
@@ -92,6 +115,7 @@ def main():
         result = subprocess.run([binary, '--ocr-image', str(invalid)],
                                 capture_output=True, text=True, timeout=10)
         assert result.returncode != 0 and 'could not encode' in result.stderr, result
+        timing(result, 'ERROR')
         print('PASS: invalid image fails without sending an OCR request')
 
         if args.real_endpoint:

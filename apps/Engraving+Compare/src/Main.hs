@@ -16,6 +16,7 @@
 module Main where
 
 import qualified ProductionLog as PL
+import qualified RuntimePerformance as PF
 
 import RuntimePaths
 import EngravingCompare
@@ -223,6 +224,7 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
+    ["--runtime-info"] -> PF.initializeRuntime >> pure ()
     [] -> mainGui
     ["--help"] -> putStrLn usage
     ["--ocr-image", path] -> loadImage path >>= (\image -> prepareOcr >>= predictOcr image) >>= putStrLn
@@ -234,11 +236,12 @@ main = do
       unless (comparisonPassed result) exitFailure
     _ -> die usage
   where
-    usage = "Usage: Camera [--ocr-image IMAGE | --compare-image IMAGE PRESET | --help]\nENGRAVING_COMPARE_CAMERA defaults to Hikvision; PADDLEOCR_ENDPOINT defaults to tcp://127.0.0.1:5555."
+    usage = "Usage: Camera [--runtime-info | --ocr-image IMAGE | --compare-image IMAGE PRESET | --help]\nENGRAVING_COMPARE_CAMERA defaults to Hikvision; PADDLEOCR_ENDPOINT defaults to tcp://127.0.0.1:5555."
     loadImage path = unsafeCoerceMat . OpenCV.imdecode OpenCV.ImreadColor <$> B.readFile path
 
 mainGui :: IO ()
 mainGui = do
+  performance <- PF.initializeRuntime
   PL.initializeProductionLog "Engraving+Compare"
   modbusInit
   runtimeDir <- getRuntimeDirectory
@@ -421,21 +424,21 @@ mainGui = do
         ocr <- prepareOcr
 
         reactimate init
-                   getTimeInput
+                   (\refresh -> PF.measure performance "input" (getTimeInput refresh))
                    (\_ (a,b,c,d,e,f,g,h,i,j,k) -> do
                        shouldClose <- windowShouldClose window
-                       runState <- runExceptT $ do
+                       runState <- PF.measure performance "frp+bindings" $ runExceptT $ do
                          LSV.setVar env "dear-rout-1" (Vision (Individual ((force a `seq` a) env shaderProgram ctrlMaps fontSet)))
                          LSV.setVar env "dear-rout-2" (Vision (Individual ((force b `seq` b) env ctrlMaps fontSet)))
                          LSV.setVar env "dear-rout-3" (Vision (Individual ((force c `seq` c) env ctrlMaps fontSet)))
                          LSV.setVar env "dear-rout-4" (Vision (Individual ((force d `seq` d) env)))
                          LSV.setVar env "dear-rout-5" (Vision (Individual ((force e `seq` e) env ctrlMaps fontSet)))
                          LSV.setVar env "dear-rout-6" (Vision (Individual ((force f `seq` f) env ctrlMaps fontSet)))
-                         LSV.setVar env "dear-rout-7" (Vision (DaisyChain ((force g `seq` g) env ctrlMaps fontSet)))
-                         LSV.setVar env "dear-rout-8" (Vision (DaisyChain ((force h `seq` h) env ctrlMaps fontSet)))
-                         LSV.setVar env "dear-rout-9" (Vision (DaisyChain ((force i `seq` i) env ctrlMaps fontSet bs ocr)))
+                         LSV.setVar env "dear-rout-7" (Vision (DaisyChain (\frame -> PF.measure performance "barcode" ((force g `seq` g) env ctrlMaps fontSet frame))))
+                         LSV.setVar env "dear-rout-8" (Vision (DaisyChain (\frame -> PF.measure performance "image-filter" ((force h `seq` h) env ctrlMaps fontSet frame))))
+                         LSV.setVar env "dear-rout-9" (Vision (DaisyChain (\frame -> PF.measure performance "serial" ((force i `seq` i) env ctrlMaps fontSet bs ocr frame))))
                          LSV.setVar env "dear-rout-10" (Vision (Individual ((force j `seq` j) env ctrlMaps fontSet)))
-                         LSV.setVar env "dear-rout-11" (Vision (DaisyChain ((force k `seq` k) env ctrlMaps fontSet bs)))
+                         LSV.setVar env "dear-rout-11" (Vision (DaisyChain (\frame -> PF.measure performance "motion" ((force k `seq` k) env ctrlMaps fontSet bs frame))))
 
                        openGL3NewFrame
                        glfwNewFrame
@@ -457,7 +460,7 @@ mainGui = do
                        pushFont msyhlFont
                        bracket_ (begin "参数设置") end do
 
-                         withRuntimeConfigFile "fun.scm" ReadMode $ \handle -> do
+                         PF.measure performance "script+vision" $ withRuntimeConfigFile "fun.scm" ReadMode $ \handle -> do
                            xs <- hGetContents handle
                            r <- LSC.evalString env xs
                            -- when (take 27 r == "An internal error occurred:") $ void $ LSC.evalString env "(set! mycam 0)"
@@ -465,15 +468,16 @@ mainGui = do
 
                        popFont
 
-                       render2 env shaderProgram vaoPtr containerPtr awesomeFacePtr window
+                       PF.measure performance "display-upload" $ render2 env shaderProgram vaoPtr containerPtr awesomeFacePtr window
 
                        -- showDemoWindow
 
                        -- glClear GL_COLOR_BUFFER_BIT
                        render
-                       openGL3RenderDrawData =<< getDrawData
-                       swapBuffers window
+                       PF.measure performance "imgui-draw" $ openGL3RenderDrawData =<< getDrawData
+                       PF.measure performance "present" $ swapBuffers window
                        pollEvents
+                       PF.endFrame performance
                        if shouldClose == True
                          then do
                            copyFile (runtimeDir ++ "/fun.scm") (configDir ++ "/fun.scm")

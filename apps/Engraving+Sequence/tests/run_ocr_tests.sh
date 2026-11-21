@@ -20,7 +20,7 @@ trap 'rm -rf -- "$test_dir"' EXIT HUP INT TERM
 stack ghc -- -threaded -package husk-scheme -package opencv -package mtl \
   -package inline-c -package inline-c-cpp -package raw-strings-qq \
   -package text -package bytestring -package stm \
-  -isrc -i"$generated_dir" -Isrc -optcxx-std=c++11 -lzmq \
+  -i../../shared/production-log -isrc -i"$generated_dir" -Isrc -optcxx-std=c++11 -lzmq \
   -outputdir "$test_dir" tests/OcrWorkerProbe.hs -o "$test_dir/worker-probe"
 test_python=${ENGRAVING_TEST_PYTHON:-$repo_dir/services/paddleocr_service/.venv/bin/python}
 if [ "${1:-}" = --real ]; then

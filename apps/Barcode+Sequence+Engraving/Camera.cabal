@@ -12,6 +12,8 @@ executable Camera
     Main.hs
   Other-Modules:
     ProductionLog
+    RuntimePerformance
+    OcrTiming
     ProductionDebug
     BankRecipes
     Parser
@@ -24,7 +26,7 @@ executable Camera
     Barcode
     BarcodeGuard
   cc-options: -Wall -std=c++11
-  ghc-options: -O2 -threaded -funbox-strict-fields -rtsopts
+  ghc-options: -O2 -threaded -funbox-strict-fields -rtsopts -with-rtsopts=-N2
   build-depends:
       base < 5
     , gl

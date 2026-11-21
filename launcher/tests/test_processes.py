@@ -89,6 +89,20 @@ raise SystemExit(int(os.environ.get('TEST_EXIT', '0')))
         self.assertTrue(self.manager.status('one')['running'])
         self.assertEqual(self.manager.status('two')['exit_code'], 7)
 
+    def test_console_timing_and_utf8_are_not_split_at_pipe_read_boundaries(self):
+        self.script.write_text('''import os, time
+payload = '识别完成\\n[PaddleOCR] status=OK request_ms=123.456\\n尾行'.encode('utf-8')
+for byte in payload:
+    os.write(2, bytes([byte]))
+    time.sleep(.002)
+''')
+        self.manager.launch('timing', self.spec('timing'))
+        wait_for(lambda: self.manager.status('timing').get('state') == 'exited')
+        log = self.manager.log_tail('timing')
+        self.assertIn('识别完成\n[PaddleOCR] status=OK request_ms=123.456\n尾行', log)
+        self.assertNotIn('\ufffd', log)
+        self.assertIn('=== 程序结束，退出码 0 ===', log)
+
     def test_application_inherits_lock_if_supervisor_is_killed(self):
         spec = self.spec('inherited')
         self.manager.launch('inherited', spec)
