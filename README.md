@@ -103,6 +103,14 @@ requests wait for a free worker. Each worker defaults to two CPU threads;
 `PADDLEOCR_WORKERS=1` selects serial fallback. A client reply timeout includes
 queue time.
 
+Each request selects its model profile. `Engraving+Compare` uses the existing
+Chinese-capable pipeline; the other four applications use the original
+`ch_PP-OCRv3_det_infer` + `en_PP-OCRv3_rec_infer` weights, with angle
+classification disabled. Import the legacy weights/dictionary once as described
+in the service README; they are stored under the service's own `.cache`, so
+the old Debian disk is not a runtime dependency. Rebuild clients when upgrading
+from the old protocol so `Engraving+Compare` sends its explicit Chinese profile.
+
 ```sh
 services/paddleocr_service/run.sh
 # In another terminal, from the repository root:

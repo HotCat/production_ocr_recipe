@@ -28,7 +28,7 @@ def service(replies, delay=0):
                 for reply in replies:
                     frames = socket.recv_multipart()
                     assert len(frames) == 2
-                    assert json.loads(frames[0]) == {'op':'recognize','encoding':'png'}
+                    assert json.loads(frames[0]) == {'op':'recognize','encoding':'png','profile':'legacy_en'}
                     time.sleep(delay)
                     socket.send_string(reply)
                 # Keep the final queued reply alive until the client has consumed it.

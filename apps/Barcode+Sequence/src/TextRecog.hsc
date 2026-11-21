@@ -72,7 +72,7 @@ static char* requestPaddleOcr(const cv::Mat& image, const char* endpoint) {
     socket.set(zmq::sockopt::rcvtimeo, replyTimeoutMs);
     socket.connect(endpoint);
 
-    const std::string header = "{\"op\":\"recognize\",\"encoding\":\"png\"}";
+    const std::string header = "{\"op\":\"recognize\",\"encoding\":\"png\",\"profile\":\"legacy_en\"}";
     if (!socket.send(zmq::buffer(header), zmq::send_flags::sndmore) ||
         !socket.send(zmq::buffer(png), zmq::send_flags::none)) {
       throw std::runtime_error("timed out sending to the PaddleOCR service");

@@ -31,7 +31,7 @@ def peer(reply, delay=0):
                 ready.put(f'tcp://127.0.0.1:{socket.bind_to_random_port("tcp://127.0.0.1")}')
                 frames = socket.recv_multipart()
                 assert len(frames) == 2
-                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png'}
+                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': 'chinese'}
                 assert cv2.imdecode(np.frombuffer(frames[1], np.uint8), cv2.IMREAD_COLOR) is not None
                 time.sleep(delay)
                 socket.send_string(reply)

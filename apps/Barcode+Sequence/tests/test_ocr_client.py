@@ -19,7 +19,7 @@ import zmq
 
 
 @contextmanager
-def peer(reply, delay=0):
+def peer(reply, delay=0, profile="legacy_en"):
     ready = queue.Queue()
     errors = []
     done = threading.Event()
@@ -35,7 +35,7 @@ def peer(reply, delay=0):
                 ready.put(f'tcp://127.0.0.1:{port}')
                 frames = socket.recv_multipart()
                 assert len(frames) == 2
-                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png'}
+                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': profile}
                 image = cv2.imdecode(np.frombuffer(frames[1], np.uint8), cv2.IMREAD_COLOR)
                 assert image is not None and image.shape == (140, 600, 3)
                 time.sleep(delay)
@@ -61,6 +61,7 @@ def peer(reply, delay=0):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='bin/Camera')
+    parser.add_argument('--profile', choices=('legacy_en', 'chinese'), default='legacy_en')
     parser.add_argument('--real-endpoint', help='also test two processes on the real service')
     args = parser.parse_args()
     binary = str(Path(args.binary).resolve())
@@ -86,25 +87,25 @@ def main():
             assert len(matches) == 1 and matches[0][0] == expected, result
             return float(matches[0][1])
 
-        with peer('中文 SERIAL 123456'.encode('utf-8'), delay=0.12) as endpoint:
+        with peer('中文 SERIAL 123456'.encode('utf-8'), delay=0.12, profile=args.profile) as endpoint:
             result = recognize(endpoint)
             assert result.returncode == 0 and result.stdout.strip() == '中文 SERIAL 123456', result
             assert timing(result, 'OK') >= 100, result
         print('PASS: multipart PNG request, UTF-8 reply and elapsed timing including service delay')
 
-        with peer(b'') as endpoint:
+        with peer(b'', profile=args.profile) as endpoint:
             result = recognize(endpoint)
             assert result.returncode == 0 and result.stdout.strip() == '', result
             timing(result, 'EMPTY')
         print('PASS: empty OCR replies retain their result and report timing')
 
-        with peer(b'ERROR: test inference failure') as endpoint:
+        with peer(b'ERROR: test inference failure', profile=args.profile) as endpoint:
             result = recognize(endpoint)
             assert result.returncode != 0 and 'test inference failure' in result.stderr, result
             timing(result, 'ERROR')
         print('PASS: service errors propagate as failures')
 
-        with peer(b'late reply', delay=0.5) as endpoint:
+        with peer(b'late reply', delay=0.5, profile=args.profile) as endpoint:
             result = recognize(endpoint, timeout_ms=100)
             assert result.returncode != 0 and 'timed out waiting' in result.stderr, result
             assert timing(result, 'ERROR') >= 90, result

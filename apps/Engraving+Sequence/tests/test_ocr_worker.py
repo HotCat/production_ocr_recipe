@@ -30,7 +30,7 @@ def peer(replies, delay=0):
                 ready.put(f'tcp://127.0.0.1:{port}')
                 for reply in replies:
                     frames = socket.recv_multipart()
-                    assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png'}
+                    assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': 'legacy_en'}
                     assert len(frames) == 2
                     image = cv2.imdecode(np.frombuffer(frames[1], np.uint8), cv2.IMREAD_COLOR)
                     assert image.shape == (140, 600, 3)

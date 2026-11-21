@@ -17,7 +17,7 @@ class FakeResult:
 
 
 class FakeEngine:
-    def recognize(self, _image):
+    def recognize(self, _image, profile="legacy_en"):
         return normalize_results([FakeResult()])
 
 
@@ -50,8 +50,30 @@ class ServiceTests(unittest.TestCase):
         constructor = Mock()
         with patch.dict('sys.modules', {'paddleocr': SimpleNamespace(PaddleOCR=constructor)}):
             with patch.dict('os.environ', {'PADDLEOCR_MODEL_ROOT': ''}):
-                PaddleEngine('en', 'cpu', 2)
-        constructor.assert_called_once_with(lang='en', device='cpu', cpu_threads=2)
+                with patch('services.paddleocr_service.legacy_v3.LegacyV3Engine') as legacy:
+                    engine = PaddleEngine('en', 'cpu', 2)
+                    image = np.zeros((8, 8, 3), np.uint8)
+                    engine.recognize(image, 'legacy_en')
+                    legacy.return_value.recognize.assert_called_once_with(image)
+                    constructor.return_value.predict.assert_not_called()
+                    constructor.return_value.predict.return_value = [FakeResult()]
+                    self.assertEqual(engine.recognize(image, 'chinese')['text'], 'A123BC45')
+        constructor.assert_called_once_with(lang='ch', device='cpu', cpu_threads=2)
+
+    def test_profiles_are_explicit_validated_and_legacy_is_default(self):
+        import cv2
+
+        class Engine:
+            def recognize(self, image, profile='legacy_en'):
+                return {'text': profile, 'lines': []}
+
+        _, png = cv2.imencode('.png', np.zeros((8, 8, 3), np.uint8))
+        for profile in ('legacy_en', 'chinese'):
+            header = json.dumps({'op': 'recognize', 'profile': profile}).encode()
+            self.assertEqual(handle_request([header, png.tobytes()], Engine()), profile.encode())
+        self.assertEqual(handle_request([b'{"op":"recognize"}', png.tobytes()], Engine()), b'legacy_en')
+        reply = handle_request([b'{"op":"recognize","profile":"typo"}', png.tobytes()], Engine())
+        self.assertIn(b'Unknown OCR profile', reply)
 
 # Each client process owns its socket. The production server loop is used unchanged.
 def _concurrent_client(endpoint, marker, barrier, results):
@@ -92,7 +114,7 @@ class ConcurrentServiceTests(unittest.TestCase):
             threads = set()
             lock = threading.Lock()
 
-            def recognize(self, image):
+            def recognize(self, image, profile="legacy_en"):
                 with self.lock:
                     self.active += 1
                     self.maximum = max(self.maximum, self.active)
@@ -171,14 +193,14 @@ class PoolEngine:
         if state.get('fail_init'):
             raise RuntimeError('test initialization failure')
 
-    def recognize(self, image):
+    def recognize(self, image, profile="legacy_en"):
         import os
         marker = int(image[0, 0, 0])
         with self.state['lock']:
             self.state['active'].value += 1
             self.state['maximum'].value = max(self.state['maximum'].value,
                                               self.state['active'].value)
-        self.state['events'].put(('start', marker, self.pid))
+        self.state['events'].put(('start', marker, self.pid, profile))
         try:
             if marker == 250:
                 os._exit(23)
@@ -187,13 +209,13 @@ class PoolEngine:
             gate = self.state.get('gates', {}).get(marker)
             if gate is not None and not gate.wait(10):
                 raise TimeoutError('test gate was not released')
-            return {'text': str(marker), 'lines': []}
+            return {'text': ('chinese:' if profile == 'chinese' else '') + str(marker), 'lines': []}
         finally:
             with self.state['lock']:
                 self.state['active'].value -= 1
 
 
-def pool_request(endpoint, marker=None, operation='recognize'):
+def pool_request(endpoint, marker=None, operation='recognize', profile='legacy_en'):
     import cv2
     import zmq
     context = zmq.Context()
@@ -202,7 +224,7 @@ def pool_request(endpoint, marker=None, operation='recognize'):
             socket.setsockopt(zmq.LINGER, 0)
             socket.setsockopt(zmq.RCVTIMEO, 10000)
             socket.connect(endpoint)
-            frames = [json.dumps({'op': operation}).encode()]
+            frames = [json.dumps({'op': operation, 'profile': profile}).encode()]
             if marker is not None:
                 ok, png = cv2.imencode('.png', np.full((8, 8, 3), marker, np.uint8))
                 assert ok
@@ -270,7 +292,8 @@ class WorkerPoolTests(unittest.TestCase):
         self.state['gates'] = {marker: self.spawn.Event() for marker in (31, 97, 207)}
         endpoint = self.start_pool()
         with concurrent.futures.ThreadPoolExecutor(3) as clients:
-            pending = {marker: clients.submit(pool_request, endpoint, marker)
+            pending = {marker: clients.submit(pool_request, endpoint, marker, 'recognize',
+                                              'chinese' if marker == 97 else 'legacy_en')
                        for marker in (31, 97, 207)}
             try:
                 first = self.state['events'].get(timeout=5)
@@ -283,15 +306,16 @@ class WorkerPoolTests(unittest.TestCase):
                 # Finish the second request first. The queued third request must
                 # use its newly idle worker while the first remains in flight.
                 self.state['gates'][second[1]].set()
-                self.assertEqual(pending[second[1]].result(timeout=5), str(second[1]))
+                expected = lambda marker: ('chinese:' if marker == 97 else '') + str(marker)
+                self.assertEqual(pending[second[1]].result(timeout=5), expected(second[1]))
                 third = self.state['events'].get(timeout=5)
                 self.assertEqual(third[0], 'start')
                 self.assertEqual(third[2], second[2])
                 self.assertFalse(pending[first[1]].done())
                 self.state['gates'][third[1]].set()
-                self.assertEqual(pending[third[1]].result(timeout=5), str(third[1]))
+                self.assertEqual(pending[third[1]].result(timeout=5), expected(third[1]))
                 self.state['gates'][first[1]].set()
-                self.assertEqual(pending[first[1]].result(timeout=5), str(first[1]))
+                self.assertEqual(pending[first[1]].result(timeout=5), expected(first[1]))
             finally:
                 for gate in self.state['gates'].values():
                     gate.set()

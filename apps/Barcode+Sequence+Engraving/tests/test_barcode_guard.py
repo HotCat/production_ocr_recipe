@@ -32,7 +32,7 @@ def service(reply):
                 ready.put(f'tcp://127.0.0.1:{port}')
                 frames = socket.recv_multipart()
                 assert len(frames) == 2
-                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png'}
+                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': 'legacy_en'}
                 assert cv2.imdecode(np.frombuffer(frames[1], np.uint8), cv2.IMREAD_COLOR) is not None
                 socket.send_string(reply)
                 # send() queues the reply; keep the socket alive until the client consumes it.

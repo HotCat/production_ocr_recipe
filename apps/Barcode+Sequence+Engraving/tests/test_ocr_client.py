@@ -18,7 +18,7 @@ import zmq
 
 
 @contextmanager
-def peer(reply, delay=0):
+def peer(reply, delay=0, profile="legacy_en"):
     ready = queue.Queue()
     errors = []
 
@@ -31,7 +31,7 @@ def peer(reply, delay=0):
                 ready.put(f'tcp://127.0.0.1:{port}')
                 frames = socket.recv_multipart()
                 assert len(frames) == 2
-                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png'}
+                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': profile}
                 image = cv2.imdecode(np.frombuffer(frames[1], np.uint8), cv2.IMREAD_COLOR)
                 assert image is not None and image.shape == (140, 600, 3)
                 time.sleep(delay)
@@ -53,6 +53,7 @@ def peer(reply, delay=0):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='bin/Camera')
+    parser.add_argument('--profile', choices=('legacy_en', 'chinese'), default='legacy_en')
     parser.add_argument('--real-endpoint', help='also test two processes on the real service')
     args = parser.parse_args()
     binary = str(Path(args.binary).resolve())
@@ -72,17 +73,17 @@ def main():
             return subprocess.run([binary, '--ocr-image', paths[text]], env=environment,
                                   capture_output=True, text=True, timeout=150)
 
-        with peer('中文 SERIAL 123456'.encode('utf-8')) as endpoint:
+        with peer('中文 SERIAL 123456'.encode('utf-8'), profile=args.profile) as endpoint:
             result = recognize(endpoint)
             assert result.returncode == 0 and result.stdout.strip() == '中文 SERIAL 123456', result
         print('PASS: multipart PNG request and UTF-8 reply')
 
-        with peer(b'ERROR: test inference failure') as endpoint:
+        with peer(b'ERROR: test inference failure', profile=args.profile) as endpoint:
             result = recognize(endpoint)
             assert result.returncode != 0 and 'test inference failure' in result.stderr, result
         print('PASS: service errors propagate as failures')
 
-        with peer(b'late reply', delay=0.5) as endpoint:
+        with peer(b'late reply', delay=0.5, profile=args.profile) as endpoint:
             result = recognize(endpoint, timeout_ms=100)
             assert result.returncode != 0 and 'timed out waiting' in result.stderr, result
         print('PASS: configured reply timeout')

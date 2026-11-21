@@ -20,6 +20,7 @@ import zmq
 
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
 MAX_WORKERS = 2
+PROFILES = ('legacy_en', 'chinese')
 
 
 def _result_mapping(result: Any) -> dict[str, Any]:
@@ -58,8 +59,15 @@ class PaddleEngine:
         if not device or device.lower().startswith("cpu"):
             os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "False")
         from paddleocr import PaddleOCR
+        from .legacy_v3 import LegacyV3Engine
 
-        options: dict[str, Any] = {"lang": lang, "cpu_threads": cpu_threads}
+        legacy_root = Path(os.getenv('PADDLEOCR_LEGACY_MODEL_ROOT',
+                                    str(Path(__file__).parent / '.cache' / 'legacy_models')))
+        self.legacy = LegacyV3Engine(legacy_root, device, cpu_threads)
+
+        # Chinese is an explicit profile; --lang must never accidentally turn
+        # the preset-text application into an English-only recognizer.
+        options: dict[str, Any] = {"lang": "ch", "cpu_threads": cpu_threads}
         if device:
             options["device"] = device
         # Installed packages supply the already tested models explicitly. No model
@@ -78,10 +86,16 @@ class PaddleEngine:
                     raise FileNotFoundError(f"Packaged OCR model missing: {directory}")
                 options[component + "_model_name"] = name
                 options[component + "_model_dir"] = str(directory)
-        self.ocr = PaddleOCR(**options)
+        self.chinese = PaddleOCR(**options)
+        logging.info('OCR profiles ready: legacy_en=PP-OCRv3 English, use_angle_cls=false, '
+                     'MKL-DNN enabled on CPU; chinese=multilingual preset text')
 
-    def recognize(self, image: np.ndarray) -> dict[str, Any]:
-        return normalize_results(self.ocr.predict(image))
+    def recognize(self, image: np.ndarray, profile: str = 'legacy_en') -> dict[str, Any]:
+        if profile == 'legacy_en':
+            return self.legacy.recognize(image)
+        if profile == 'chinese':
+            return normalize_results(self.chinese.predict(image))
+        raise ValueError(f'Unknown OCR profile: {profile}')
 
 
 def handle_request(frames: list[bytes], engine: Any) -> bytes:
@@ -97,6 +111,9 @@ def handle_request(frames: list[bytes], engine: Any) -> bytes:
             return b'{"ok":true,"service":"paddleocr"}'
         if operation not in ("recognize", "recognize_json"):
             raise ValueError("unsupported operation")
+        profile = header.get('profile', 'legacy_en')
+        if profile not in PROFILES:
+            raise ValueError(f'Unknown OCR profile: {profile}')
         if len(frames) != 2:
             raise ValueError("recognize expects a header and one image frame")
         encoded = frames[1]
@@ -105,7 +122,7 @@ def handle_request(frames: list[bytes], engine: Any) -> bytes:
         image = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError("image frame is not a supported encoded image")
-        result = engine.recognize(image)
+        result = engine.recognize(image, profile=profile)
         if operation == "recognize_json":
             return json.dumps(result, ensure_ascii=False).encode("utf-8")
         return result["text"].encode("utf-8")
@@ -131,7 +148,7 @@ def serve_requests(socket: zmq.Socket, engine: Any,
 
 def _worker(backend: str, identity: bytes, lang: str, device: str | None,
             cpu_threads: int, stop: Any, engine_factory: Any) -> None:
-    """A spawned process owns one pipeline and never overlaps its predict calls."""
+    """A process owns both profiles and never overlaps either predict call."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     # Set these before importing Paddle/OpenCV/NumPy in the fresh interpreter.
     for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
@@ -159,8 +176,12 @@ def _worker(backend: str, identity: bytes, lang: str, device: str | None,
                 logging.debug("OCR %s request started", identity.decode())
                 reply = handle_request(request[2:], engine)
                 socket.send_multipart([b"RESULT", *request[:2], reply])
-                logging.info("OCR %s request completed in %.3fs", identity.decode(),
-                             time.monotonic() - started)
+                try:
+                    profile = json.loads(request[2]).get('profile', 'legacy_en')
+                except (ValueError, AttributeError, IndexError):
+                    profile = 'invalid'
+                logging.info("OCR %s profile=%s completed in %.3fs", identity.decode(),
+                             profile, time.monotonic() - started)
     finally:
         context.term()
 
@@ -292,7 +313,8 @@ def serve(endpoint: str, lang: str, device: str | None = "cpu", workers: int = 2
 def main() -> None:
     parser = argparse.ArgumentParser(description="Shared PaddleOCR ZeroMQ service")
     parser.add_argument("--bind", default=os.getenv("PADDLEOCR_BIND", "tcp://127.0.0.1:5555"))
-    parser.add_argument("--lang", default=os.getenv("PADDLEOCR_LANG", "en"))
+    parser.add_argument("--lang", default=os.getenv("PADDLEOCR_LANG", "en"),
+                        help='Compatibility option; request profile selects English v3 or Chinese')
     parser.add_argument("--device", default=os.getenv("PADDLEOCR_DEVICE", "cpu"))
     parser.add_argument("--workers", type=int, choices=range(1, MAX_WORKERS + 1),
                         default=os.getenv("PADDLEOCR_WORKERS", "2"))
