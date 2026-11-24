@@ -781,8 +781,9 @@ loadCamFrame img =
   case miShape (matInfo img) of
     [h, w] | h > 0 && w > 0 ->
       withMatData (matFlip img FlipVertically) $ \_ ptr -> do
+        -- Live textures use GL_LINEAR, which samples level zero only. Building
+        -- mipmaps every frame wastes CPU, especially with Mesa llvmpipe.
         glTexImage2D GL_TEXTURE_2D 0 GL_RGB w h 0 GL_RGB GL_UNSIGNED_BYTE (castPtr ptr)
-        glGenerateMipmap GL_TEXTURE_2D
     _ -> return ()
 
 

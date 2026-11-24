@@ -49,7 +49,11 @@ print(':'.join(paths))
 PYTHON
   )
 fi
-export LD_LIBRARY_PATH="$repo_dir/build/native/fpp:$repo_dir/build/native/reconstruct${local_library_dirs:+:$local_library_dirs}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+opencv_library_dir=
+if [ -r "$repo_dir/build/native/opencv-lowcpu/lib/libopencv_core.so.4.2" ]; then
+  opencv_library_dir="$repo_dir/build/native/opencv-lowcpu/lib"
+fi
+export LD_LIBRARY_PATH="${opencv_library_dir:+$opencv_library_dir:}$repo_dir/build/native/fpp:$repo_dir/build/native/reconstruct${local_library_dirs:+:$local_library_dirs}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # Keep the GHC runtime bounded even when the launcher inherits GHCRTS from a
 # user's shell. Two capabilities leave the GUI responsive while preventing a

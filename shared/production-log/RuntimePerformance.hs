@@ -14,7 +14,7 @@ import GHC.Conc (getNumCapabilities)
 import GHC.Stats
 import qualified OpenCV as CV
 import System.CPUTime (getCPUTime)
-import System.Environment (lookupEnv)
+import System.Environment (lookupEnv, setEnv)
 import System.IO (hPutStrLn, stderr)
 import Text.Printf (printf)
 import Text.Read (readMaybe)
@@ -30,6 +30,14 @@ data Sample = Sample
 
 initializeRuntime :: IO Performance
 initializeRuntime = do
+  -- Mesa's llvmpipe pool is independent of OpenCV. Bound it before GLFW creates
+  -- a GL context; otherwise texture uploads/drawing can occupy several CPUs.
+  -- This variable does not limit hardware GPU rendering. Honor explicit tuning.
+  softwareThreads <- lookupEnv "LP_NUM_THREADS"
+  selectedSoftwareThreads <- case softwareThreads of
+    Nothing -> setEnv "LP_NUM_THREADS" "1" >> pure "1"
+    Just selected -> pure selected
+  hPutStrLn stderr ("[runtime] Mesa software renderer threads=" ++ selectedSoftwareThreads)
   setting <- lookupEnv "OCR_OPENCV_THREADS"
   case setting of
     Just "auto" -> CV.setNumThreads (-1)
@@ -41,6 +49,12 @@ initializeRuntime = do
   threads <- CV.getNumThreads
   caps <- getNumCapabilities
   hPutStrLn stderr (printf "[runtime] Haskell capabilities=%d; OpenCV threads=%d" caps threads)
+  buildInfo <- CV.getBuildInformation
+  let backend = case [unwords (drop 2 (words line)) | line <- lines buildInfo,
+                      take 2 (words line) == ["Parallel", "framework:"]] of
+        name:_ -> name
+        [] -> "unknown"
+  hPutStrLn stderr ("[runtime] OpenCV parallel backend=" ++ backend)
   enabled <- (== Just "1") <$> lookupEnv "OCR_CPU_PROFILE"
   if not enabled then pure Nothing else do
     available <- getRTSStatsEnabled

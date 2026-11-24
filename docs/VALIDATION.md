@@ -1,5 +1,46 @@
 # Import validation
 
+## Rebuild and runtime validation, 2026-11-24
+
+After syncing `be01105`, `scripts/build-all.sh` rebuilt and installed all five
+clients with the local camera/UI and CPU improvements. The exposure control
+minimum is 1000 in every client. Engraving+Sequence hides its motion controls
+and preview, and no client binary retains the noisy
+`modbus_read_holding_registers:` polling message.
+
+- All five actual launch paths passed `scripts/test-rts-capabilities.sh`,
+  including environment overrides and rejection of invalid limits. Each reports
+  two Haskell capabilities, one OpenCV thread, parallel backend `none`, and one
+  Mesa software-rendering worker by default. Native symbol resolution passed
+  with the isolated OpenCV 4.2 core for every executable.
+- The compiled English clients passed PNG/UTF-8 transport, request timing,
+  optional angle-classification headers, empty replies, service errors, reply
+  timeouts, invalid images and two concurrent requests against the real service.
+  Each also recognized a real synthetic label with classification enabled.
+- The compiled Chinese comparator passed the updated preset-substring rules,
+  whitespace/colon normalization, case/punctuation checks, empty/invalid input,
+  service errors and timeout behavior. Real Chinese/mixed-text tests and two
+  concurrent compiled clients passed. These CLI modes bypass camera/PLC/log
+  initialization.
+- PaddleOCR's Python dependency check found no broken requirements, and all
+  21 service/legacy tests passed. The optional classifier was provisioned with
+  its pinned archive SHA256; its weights remain ignored. The updated user
+  service was restarted and loaded both OCR profiles in each of two CPU workers,
+  with two math threads per worker. Concurrent English requests with and without
+  classification, Chinese requests, and the health check passed.
+- Launcher unittest discovery passed 38 tests; five compiled Haskell integration
+  cases were explicitly skipped by that suite. No production GUI or physical
+  PLC/camera was started for these checks. The texture benchmark used a hidden
+  GL context and verified identical uploaded pixels for all three upload modes.
+- Source audit, shell syntax checks and Git whitespace checks passed. Generated
+  executables, the rebuilt OpenCV library, model weights, Python environments,
+  user configuration and production databases remain excluded from Git.
+
+The CPU measurements in [CPU_PROFILING.md](CPU_PROFILING.md) are the earlier
+2026-11-23 virtual-preview investigation, not a new physical production workload
+measurement on this rebuild. See [BUILDING.md](BUILDING.md) for reproducing the
+isolated core and deploying its generated library with the clients.
+
 Validated on the existing Ubuntu 24.04 amd64 development workstation on
 2026-11-17. This validates relocated source builds against the separately
 installed native stack and SDKs; it is not a clean-machine provisioning test.

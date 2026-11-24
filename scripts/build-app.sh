@@ -7,6 +7,11 @@ if [ "$#" -lt 1 ]; then
 fi
 application=$1
 shift
+opencv_library_dir="$repo_dir/build/native/opencv-lowcpu/lib"
+if [ -r "$opencv_library_dir/libopencv_core.so.4.2" ]; then
+  # Also use this runtime for direct bin/Camera launches, not only the launcher.
+  set -- "--ghc-options=-optl-Wl,-rpath,$opencv_library_dir" "$@"
+fi
 case "$application" in
   Barcode+Sequence|Barcode+Sequence+Barcode|Barcode+Sequence+Engraving|Engraving+Sequence|Engraving+Compare) ;;
   *) echo "Unknown application: $application" >&2; exit 2 ;;

@@ -41,6 +41,38 @@ A stock Ubuntu OpenCV installation is a different ABI; do not mix it with
 libraries compiled against the workstation's 4.2 stack. The included CMake
 source builds `FFPLibrary` and `reconstruct` from the imported sources.
 
+## Client OpenCV without a worker pool
+
+To build the production clients' single-threaded OpenCV core, obtain the clean
+OpenCV **4.2.0** source (the upstream tag linked above), then run:
+
+```sh
+scripts/build-opencv-lowcpu.sh /path/to/opencv-4.2.0
+scripts/build-all.sh
+```
+
+This builds `libopencv_core.so.4.2` in Release mode with native parallel backends
+disabled. SIMD optimizations remain enabled. Other OpenCV 4.2 modules and their
+headers remain the installed versions; this is an ABI-compatible core override,
+not a mixture of OpenCV versions. The output is under
+`build/native/opencv-lowcpu/lib`, outside Git. No root access is needed and
+`/usr/local` is untouched. The launcher/run script selects this core, and the app
+build helper embeds its runtime search path for direct `bin/Camera` execution.
+Build this core before rebuilding the apps after moving the checkout.
+
+`scripts/run-app.sh APP --runtime-info` reports the actual thread count and
+parallel backend. With the isolated core it must report `OpenCV threads=1` and
+`OpenCV parallel backend=none`, including when an environment setting requests
+more threads. PaddleOCR uses its separate Python wheel/runtime and is unaffected.
+Before creating an OpenGL context, clients also default Mesa's software renderer
+to `LP_NUM_THREADS=1`; explicit values are preserved. This independent setting
+prevents llvmpipe's texture/drawing workers from consuming the CPU saved in
+OpenCV, without changing hardware GPU rendering.
+To roll back, move `build/native/opencv-lowcpu` aside; the clients fall back to
+the original installed OpenCV. To copy a deployment, include the isolated library
+in its native runtime bundle; the older app packaging scripts do not yet collect
+this new directory automatically.
+
 ## Vendor installations (excluded from the repository)
 
 - Hikvision MVS: headers in `/opt/MVS/include`, library in `/opt/MVS/lib/64`.

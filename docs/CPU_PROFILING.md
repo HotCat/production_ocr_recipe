@@ -1,5 +1,82 @@
 # Client CPU investigation
 
+## 2026-11-23: worker-free OpenCV and live texture uploads
+
+On the production i3-8100 host, the 1280×1024 synthetic transform probe at 60 FPS
+used 161.4% process CPU with the installed four-worker pthread pool, versus
+20.8% with its runtime limit set to one. Both produced pixel hash
+`84125166443334067`. These clients already request one worker at startup, so
+the four-worker result does not establish that their remaining CPU use comes
+from that pool.
+
+`scripts/build-opencv-lowcpu.sh` now builds an isolated OpenCV 4.2.0 core with
+`Parallel framework: none`. This prevents native OpenCV parallel workers from
+being started even if another library resets the thread count or execution
+enters OpenCV on a different thread. It preserves Release/SIMD optimization and
+does not replace the system installation or PaddleOCR's Python runtime. See
+[BUILDING.md](BUILDING.md#client-opencv-without-a-worker-pool) for rebuilding.
+
+`glxinfo -B` also reported **llvmpipe software rendering**, rather than hardware
+acceleration. Texture upload and drawing therefore consume CPU independently
+of OpenCV. All live camera and ROI textures use `GL_LINEAR` minification, which
+samples level zero. Their unused per-frame `glGenerateMipmap` calls have been
+removed from the shared Husk camera uploader and all five clients' ROI previews.
+The input image pixels, vertical orientation, resolution, and OCR data are
+unchanged. No frame-rate or PLC polling limit was added.
+
+The camera/PLC-free texture probe measured the original upload at 39.3% CPU and
+the same upload without mipmaps at 14.6%, both at 60 FPS. Texture readback matched
+the flipped source byte for byte, with hash `7557149636557714341`. Reusing texture
+storage measured 14.4%; this small extra saving did not justify additional
+texture-state tracking. These are synthetic component measurements, not
+whole-app production CPU promises. The older measurements below were taken on
+a different workstation.
+
+An application-level comparison then used the actual `Engraving+Compare` GUI,
+its existing 1280×1024 virtual-camera fixture and a copy of its saved profiles.
+It used simulated Modbus and temporary configuration/runtime/log directories;
+no physical camera, PLC or production history was accessed. Each process warmed
+up for six seconds, then `/proc` CPU was sampled for six seconds. One occupied
+core equals 100%. The stable five-second phase report supplies FPS:
+
+| Engraving+Compare virtual preview | CPU | FPS |
+| --- | ---: | ---: |
+| Original binary, installed core, default Mesa workers | 157.8% | 18.3 |
+| No live mipmaps, installed core | 133.3% | 23.1 |
+| No live mipmaps, worker-free core | 138.1% | 21.8 |
+| No live mipmaps, worker-free core, one Mesa worker | 60.8% | 25.4 |
+
+The small difference between the middle two runs is within this short test's
+scheduling variation; rebuilding OpenCV alone did not fix the remaining CPU
+use. The largest remaining gain came from Mesa's independent llvmpipe workers.
+`LP_NUM_THREADS=2` measured 97.7%, while `LP_NUM_THREADS=1` measured 60.8–61.7%.
+Disabling `mesa_glthread` explicitly made no material difference, so that
+setting is left alone. OpenGL diagnostics reported that the current Xwayland
+display is not DRI3-capable and uses llvmpipe despite the installed Intel GPU.
+
+All five clients now default `LP_NUM_THREADS` to `1` before GLFW creates its
+context, including direct binary launches. An explicitly supplied value is
+preserved. This setting affects llvmpipe software rendering, not hardware GPU
+rendering or the separate OCR server. There is no frame-rate cap or artificial
+sleep. The virtual-preview result meets the requested CPU budget for that test;
+it is not a 70–80% guarantee for every physical-camera/production workload.
+The final rebuilt binary was retested with `LP_NUM_THREADS` absent from the
+environment: its startup default selected one worker and measured **60.3% CPU
+at 24.3 FPS**. All five binaries passed runtime/override checks, complete native
+symbol resolution and real English/Chinese OCR requests after rebuilding.
+
+```sh
+scripts/profile-opencv-cpu.sh 60  # installed core versus isolated core, if built
+scripts/profile-texture-cpu.sh   # hidden GL window; no camera, PLC or OCR
+```
+
+The texture probe needs an active display and GLFW/GLEW/OpenGL development
+libraries. It waits for GPU/driver work with `glFinish` so queued commands are
+included, and checks the uploaded base-level pixels. Its temporary window is
+hidden. Whole-app CPU still depends on camera FPS, open preview panels, decoded
+barcodes, active OCR requests, the display driver and concurrent clients. Use
+the runtime phase reports and `/proc` sampler below to measure those workloads.
+
 The high CPU measured on 2026-11-21 came primarily from OpenCV's native worker
 pool. Restricting GHC to two capabilities alone had not fixed it. All five GUI
 clients now call `OpenCV.setNumThreads 1` before camera/worker initialization.
@@ -117,9 +194,11 @@ Runtime settings:
 | `OCR_RTS_CAPABILITIES` (launch script) | `2` | `1`, `2` |
 | `OCR_OPENCV_THREADS` (client startup) | `1` | integers `1` through `16`, or `auto` |
 | `OCR_CPU_PROFILE` | disabled | `1` enables reporting |
+| `LP_NUM_THREADS` | `1` | Mesa software-rendering workers; explicit settings preserved |
 
 `auto` is intended for a controlled baseline comparison; it can restore the high
-CPU use. The launch script supplies `GHCRTS=-N2` (or `-N1`) and adds `-T` when
+CPU use with the system core; a worker-free core always reports one thread.
+The launch script supplies `GHCRTS=-N2` (or `-N1`) and adds `-T` when
 profiling, overriding inherited RTS settings. Launching the binary directly
 still gets its compiled `-N2` default, but explicit RTS arguments can override
 that. GHC capabilities do not limit native pools or the separate PaddleOCR

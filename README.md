@@ -173,8 +173,18 @@ GC workers only. Each GUI client also sets OpenCV's native worker pool to **one
 thread**, independently of GHC. This eliminated excessive native worker CPU in
 the live barcode client (about 471% to 108% on the measured machine).
 
-`OCR_OPENCV_THREADS=1..16` overrides the native limit; `auto` restores OpenCV's
-machine-dependent default for diagnostic comparisons. `OCR_CPU_PROFILE=1`
+For the production runtime, build the isolated worker-free OpenCV core with
+`scripts/build-opencv-lowcpu.sh /path/to/opencv-4.2.0` before rebuilding the apps.
+The launcher and rebuilt binaries use it automatically; `--runtime-info` reports
+`OpenCV parallel backend=none`. Live previews also skip unused mipmap generation,
+which is costly when OpenGL falls back to CPU rendering.
+Each client also defaults Mesa's llvmpipe software renderer to one worker before
+creating a GL context. `LP_NUM_THREADS` overrides that setting; hardware GPU
+rendering is unaffected.
+
+With the original system OpenCV, `OCR_OPENCV_THREADS=1..16` overrides the native
+limit and `auto` restores its machine-dependent default for comparisons. With
+the worker-free core, the actual count stays one. `OCR_CPU_PROFILE=1`
 enables five-second frame/phase/GC timing reports in the runtime log. No frame
 rate or production trigger throttling is introduced. See
 [docs/CPU_PROFILING.md](docs/CPU_PROFILING.md) for measurements, scope and commands.

@@ -610,7 +610,7 @@ cameraParams' sg = proc oi -> do
                 dragFloat' env b13' "Sharpness" sharpness 1.0 1.0 90.0
                 sameLine
                 showHelp msyhlFont "图像锐度：这个数值尽量保持为1，数值大了非常影响OCR识别率"
-                dragFloat' env b14' "Exposure" exposure 500.0 5000.0 50000.0
+                dragFloat' env b14' "Exposure" exposure 500.0 1000.0 50000.0
                 sameLine
                 showHelp msyhlFont "CCD曝光时间：曝光时间越长，相机帧率越低，OCR识别速度越慢。尽量将这个参数控制在比较小的数值，通过调整镜头上的光圈来提高图像亮度"
 
@@ -973,8 +973,7 @@ barcodeOCR' runtime sg = proc oi -> do
                           GL_RGB 
                           w h
                           0 GL_RGB GL_UNSIGNED_BYTE
-                          (castPtr ptr)
-                        glGenerateMipmap GL_TEXTURE_2D)
+                          (castPtr ptr))
 
                       ImVec2 w h <- get size
                       ImVec2 px py <- get pos
@@ -1166,8 +1165,7 @@ serialNumOCR' sg = proc oi -> do
                           GL_RGB 
                           w h
                           0 GL_RGB GL_UNSIGNED_BYTE
-                          (castPtr ptr)
-                        glGenerateMipmap GL_TEXTURE_2D)
+                          (castPtr ptr))
 
                       ImVec2 w h <- get size
                       ImVec2 px py <- get pos

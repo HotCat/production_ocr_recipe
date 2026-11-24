@@ -100,8 +100,6 @@ modbusTrigger = if PD.debugMode then do
     read_holding_regs[0] = 0;
     mb.modbus_read_holding_registers(0, 1, read_holding_regs);
 
-    std::cout << "modbus_read_holding_registers: " << read_holding_regs[0] << std::endl;
-
     static std::string nop;
     nop = "ng";
 
