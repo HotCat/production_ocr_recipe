@@ -88,13 +88,17 @@ def main():
             ('客服电活：96008', expected, False),
             ('客服电话：96009', expected, False),
             ('客服电话96008', expected, False),
-            (expected + '额外', expected, False),
+            (expected + '额外', expected, True),
+            ('前缀' + expected, expected, True),
+            ('前缀 客服 电话:96008\n后缀', expected, True),
+            (expected, '前缀' + expected, False),
+            ('客服电话：额外96008', expected, False),
             ('', expected, False),
             ('ERROR: inference unavailable', expected, False),
         ]:
             with peer(reply) as endpoint:
                 check(compare(endpoint, preset), passed, 'OK ' if passed else 'NG ')
-        print('PASS: compiled UTF-8 comparator preserves Chinese/English/punctuation and rejects missing/wrong/extra text')
+        print('PASS: compiled UTF-8 comparator accepts preset substrings with surrounding text and rejects missing/wrong/interrupted presets')
 
         with peer(expected, delay=0.25) as endpoint:
             check(compare(endpoint, timeout_ms=50), False, 'timed out waiting')
@@ -111,14 +115,15 @@ def main():
             for image, preset, passed in [
                 ('chinese', expected, True),
                 ('mixed', expected + ' ABC-01', True),
+                ('mixed', expected, True),
                 ('wrong', expected, False),
-                ('extra', expected, False),
+                ('extra', expected, True),
                 ('empty', expected, False),
                 ('mixed', expected + ' abc-01', False),
                 ('chinese', expected, True),
             ]:
                 check(compare(args.real_endpoint, preset, image, timeout_ms=120000), passed, 'OK ' if passed else 'NG ')
-            print('PASS: real PaddleOCR Chinese/mixed labels, wrong text, extra text, empty image, case and repeated unchanged preset')
+            print('PASS: real PaddleOCR accepts surrounding text and rejects wrong text, empty image and changed case; repeated preset needs no increment')
 
             def concurrent(image):
                 preset = texts[image]

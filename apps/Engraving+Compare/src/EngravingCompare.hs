@@ -5,6 +5,7 @@ import Control.Concurrent.Async (Async, async, poll)
 import qualified Control.Exception as E
 import Data.Char (isSpace)
 import Data.IORef
+import Data.List (isInfixOf)
 import qualified Data.Text as T
 
 -- Preserve Chinese, Latin case, digits and punctuation. OCR layout whitespace
@@ -28,8 +29,8 @@ compareEngraving expected recognized
       Left failure -> result "" False ("PaddleOCR: " ++ failure)
       Right raw
         | null (normalizeEngraving raw) -> result raw False "未识别到刻字"
-        | normalizeEngraving raw == normalizeEngraving expected -> result raw True "刻字与预设文字一致"
-        | otherwise -> result raw False "刻字与预设文字不一致"
+        | normalizeEngraving expected `isInfixOf` normalizeEngraving raw -> result raw True "识别刻字包含预设文字"
+        | otherwise -> result raw False "识别刻字未包含预设文字"
   where result raw passed detail = ComparisonResult expected raw passed detail
 
 inspectEngravingWith :: IO String -> String -> IO ComparisonResult

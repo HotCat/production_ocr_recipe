@@ -60,6 +60,7 @@ configTemplate6 = [r|  (load-system-property all-controls-references "%s" %d)
 captionHelp = [r|选择刻字区域并填写预设文字，点击评估查看比对结果。
 点击检测一次或PLC触发进行生产检测，不检查顺号。
 识别结果保留中文、英文大小写、数字和标点。
+识别文字包含预设文字即通过，允许前后有其他文字；忽略空白，中英文冒号等价。
 长按Ok,Ng计数区域3秒清零，保存参数可保存当前预设。
 |]
 

@@ -34,11 +34,15 @@ main = do
   forM_ ["客服电话：96008", "客 服 电话 : 96008\n", "客服电话:96008"] $ \raw ->
     assert "Chinese text retained; layout and colon width ignored" (passes "客服电话：96008" raw)
   assert "mixed Chinese, Latin and punctuation preserved" (passes "客服电话：96008 / ABC-01" "客服电话:96008/ABC-01")
-  forM_ ["96008", "客服电活：96008", "客服电话：96009", "客服电话：96008额外", "", " \n"] $ \raw ->
-    assert ("reject changed/missing/extra characters: " ++ raw) (not (passes "客服电话：96008" raw))
+  forM_ ["客服电话：96008额外", "前缀客服电话：96008", "前缀客 服 电话:96008\n后缀"] $ \raw ->
+    assert ("preset may occur at start, end or middle: " ++ raw) (passes "客服电话：96008" raw)
+  forM_ ["96008", "客服电活：96008", "客服电话：96009", "客服电话：额外96008", "", " \n"] $ \raw ->
+    assert ("reject changed, interrupted or missing preset: " ++ raw) (not (passes "客服电话：96008" raw))
+  assert "substring matching is directional" (not (passes "前缀客服电话：96008" "客服电话：96008"))
   assert "Latin case is significant" (not (passes "客户 ABC" "客户 abc"))
   assert "punctuation cannot disappear" (not (passes "客服电话：96008" "客服电话96008"))
   assert "empty preset cannot pass" (not (passes " \n" ""))
+  assert "empty preset cannot pass nonempty recognition" (not (passes " \n" "客服电话：96008"))
   assert "same preset may pass repeatedly without increment" (all (passes "客服电话：96008") (replicate 5 "客服电话：96008"))
   failure <- inspectEngravingWith (throwIO (userError "offline")) "客服电话：96008"
   assert "OCR failure rejects" (not (comparisonPassed failure) && "offline" `isInfixOf` comparisonDetail failure)
@@ -46,7 +50,7 @@ main = do
   blank <- inspectEngravingWith (writeIORef called True >> pure "wrong") " "
   didCall <- readIORef called
   assert "unset preset skips OCR and rejects" (not didCall && not (comparisonPassed blank))
-  putStrLn "PASS: multilingual whole-text comparison, case/punctuation, missing/extra text and no sequence increment"
+  putStrLn "PASS: multilingual preset substring comparison, surrounding text, case/punctuation, missing text and no sequence increment"
 
   -- Roundtrip through the actual Scheme control loader used by GUI profiles.
   env <- Scheme.r5rsEnv

@@ -42,12 +42,14 @@ change it (1–3600000 ms); the send timeout is 5 seconds.
 4. Click `检测一次`, or trigger from the PLC, to perform a production inspection.
 5. Click `保存参数` to immediately save the preset with the current camera/region profile to permanent storage. The next launch automatically restores that last saved profile and its preset, even if the previous process did not exit normally.
 
-The complete recognized text must equal the complete preset after whitespace
+The complete preset must be a substring of the recognized text after whitespace
 is removed and `：` is converted to `:` on both sides. Line breaks and OCR spaces
 therefore do not cause a rejection, and Chinese/English colon widths are
 equivalent. Case, other punctuation and every Chinese character must match.
-Extra text is rejected: selecting a tight region around the required engraving
-avoids unrelated text. Missing text, an empty preset, an invalid crop or an OCR
+Extra text before or after the preset is accepted: for example, preset
+`客服电话：96008` passes with `产品说明 客服电话:96008 ABC-01`. The preset must
+appear contiguously after normalization; inserted non-whitespace characters
+inside it still fail. Missing text, an empty preset, an invalid crop or an OCR
 service failure produces NG. The log includes both the original preset and
 original recognized text, plus the failure reason.
 
@@ -110,7 +112,8 @@ packaging scripts still describe the older `engraving-sequence` application;
 they are not an installer for this new client.
 
 Validated on this Ubuntu host: compilation and native library resolution;
-multilingual comparison; rejection of changed/missing/extra text, case and
+multilingual preset substring comparison; acceptance of surrounding text;
+rejection of changed/missing/interrupted presets, case and
 punctuation errors; actual Scheme preset save/load with Unicode and escapes;
 background request lifecycle, bounded concurrency, held-trigger behavior and
 invalidation after preset/profile edits. Real PaddleOCR checks cover Chinese

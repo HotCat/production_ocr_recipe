@@ -734,7 +734,7 @@ serialNumOCR' runtime sg = proc oi -> do
                     bracket_ (pushFont msyhlFont) popFont $ do
                       changedPreset <- inputText "预设文字" (comparisonPreset runtime) 4096
                       sameLine
-                      showHelp msyhlFont "识别区域的完整文字必须与预设一致。保留中文、英文大小写、数字及标点；忽略空白，中英文冒号等价。不进行顺号检查。保存参数可记忆当前文字。"
+                      showHelp msyhlFont "识别文字中包含完整预设文字即通过，允许前后有其他文字。保留中文、英文大小写、数字及标点；忽略空白，中英文冒号等价。不进行顺号检查。保存参数可记忆当前文字。"
                       when changedPreset $ do
                         syncComparisonSettings runtime liveProfile
                         ocrState $=! OcrUnknown
