@@ -28,7 +28,7 @@ def service(replies, delay=0):
                 for reply in replies:
                     frames = socket.recv_multipart()
                     assert len(frames) == 2
-                    assert json.loads(frames[0]) == {'op':'recognize','encoding':'png','profile':'legacy_en'}
+                    assert json.loads(frames[0]) == {'op':'recognize','encoding':'png','profile':'legacy_en','use_angle_cls':False}
                     time.sleep(delay)
                     socket.send_string(reply)
                 # Keep the final queued reply alive until the client has consumed it.
@@ -59,7 +59,7 @@ def main():
             assert cv2.imwrite(str(root/(name+'.png')),label(decoded,printed))
         def inspect(endpoint, product='match', packaging='match', flags=(), timeout_ms='120000'):
             return subprocess.run([binary,'--barcode-pair',str(root/(product+'.png')),str(root/(packaging+'.png')),*flags],
-                env=dict(os.environ,PADDLEOCR_ENDPOINT=endpoint,PADDLEOCR_TIMEOUT_MS=timeout_ms),
+                env=dict(os.environ,PADDLEOCR_ENDPOINT=endpoint,PADDLEOCR_TIMEOUT_MS=timeout_ms,PADDLEOCR_USE_ANGLE_CLS='0'),
                 text=True,capture_output=True,timeout=150)
         def check(result, passed, marker):
             assert (result.returncode==0)==passed and marker in result.stdout, result

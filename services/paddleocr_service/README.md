@@ -23,8 +23,9 @@ Debian installation**: `ch_PP-OCRv3_det_infer`, `en_PP-OCRv3_rec_infer`, and
 `en_dict.txt`. It runs through Paddle Inference's legacy model reader in the
 current Python environment; no Debian shared libraries, executable or mounted
 old filesystem are needed. MKL-DNN is enabled for its CPU predictors. The
-English path has **`use_angle_cls=false`**: no angle classifier, document
-orientation model or document unwarping model is loaded or called on that path.
+English path defaults to **`use_angle_cls=false`**: no angle classifier is
+loaded or called until a request explicitly enables it. Document orientation
+and document unwarping models are never used on the English path.
 The geometric crop of a tall detected region retains the old crop behavior.
 
 The adapter retains BGR preprocessing, detector maximum side 960, DB thresholds
@@ -40,7 +41,75 @@ that worker. Two workers still allow at most two concurrent requests overall;
 queued requests and profile choices retain their correct reply routes. Worker
 limits apply to the whole service, not separately to each profile.
 
-### Import the original v3 model assets
+## Optional angle classification
+
+The four English applications can enable PaddleOCR's original
+`ch_ppocr_mobile_v2.0_cls_infer` classifier with `"use_angle_cls": true` in their
+launcher JSON program entry (not an inspector parameter). The client sends this
+boolean in every request. A worker classifies detected text crops **before**
+English recognition, in batches of six, and rotates a crop 180° only if its
+180° confidence exceeds 0.9. This is a 0°/180° text-line classifier, not arbitrary
+page rotation or a change to sequence `Reverse`. Existing detection, cropping,
+dictionary and recognition models remain the same. The Chinese application is
+unchanged; `use_angle_cls=true` with `profile=chinese` is rejected.
+
+Prepare the optional model explicitly before enabling the option:
+
+```sh
+python3 -m services.paddleocr_service.prepare_angle_classifier
+```
+
+This downloads the official ~2.1 MiB archive, checks its pinned SHA256, and
+extracts only the two inference files beneath `.cache/legacy_models/`.
+`--destination` accepts another legacy model root, including the location
+selected by `PADDLEOCR_LEGACY_MODEL_ROOT`. For offline installation, either
+copy the complete legacy model root from a prepared PC, or download the archive
+on another PC and pass `--archive /path/to/ch_ppocr_mobile_v2.0_cls_infer.tar`.
+Models remain outside Git. Preparation is repeatable and refuses to overwrite
+different weights. Inference never downloads assets: enabling the option
+without the classifier returns an explicit error, and disabled requests still work.
+
+Each worker lazily loads one classifier predictor on its first enabled request,
+then reuses it. The flag is per request and never changes a worker-global mode,
+so enabled and disabled clients may run concurrently without settings leaking.
+The existing worker limit and serial execution inside each worker still apply.
+Rebuild all four English clients and restart the service to activate a code
+upgrade. Older clients without the new request field continue with `false`.
+
+Measure your actual production region with alternating warmed requests:
+
+```sh
+services/paddleocr_service/.venv/bin/python -m services.paddleocr_service.benchmark_angle_cls \
+  --image /path/to/cropped-production-region.png --samples 30
+```
+
+Without `--image`, it generates a synthetic 600×140 `SERIAL 123456` label with
+one text line. It reports first request, warmed median and p95 for each setting,
+recognized text/line count, and the median difference in ms and percent.
+Default six warmup requests per setting cover both service workers; increase
+this if changing the worker policy. Use `--endpoint` for an isolated test service.
+Timing includes ZeroMQ queue/network waits and PNG decode; the image is encoded
+once before measurement. Application `request_ms` also includes PNG encoding.
+First-request figures mean the first requests in that benchmark run; a service
+already used by another client may have loaded/warmed its classifier earlier.
+The application's 运行日志 includes `use_angle_cls=true/false` beside each timing.
+Compare the same regions and load: classifier cost depends on detected line
+count, crop shape, CPU and concurrent requests. First-use loading is not steady-state latency.
+
+Validation on 2026-11-24, Intel Core i5-8500, CPU inference, two service workers
+with two Paddle threads each: the synthetic single-line label above took
+**22.391 ms off / 24.920 ms on** at the median, an increase of **2.529 ms (11.3%)**.
+The p95 values were 25.623 / 25.730 ms. This used 30 alternating measured
+requests per setting after six warmups per setting, with builds finished and
+the camera preview closed. It is a single-line latency check, not a production
+guarantee. Earlier first enabled requests through compiled clients took roughly
+160–210 ms including loading/warmup; each worker pays that cost independently.
+All four rebuilt clients passed enabled/disabled request and runtime-log checks;
+real upside-down labels were corrected only when enabled, concurrent opposite
+settings retained their own results, and Chinese preset recognition still passed.
+The service/legacy tests (21) and launcher config/UI tests (14) passed.
+
+## Import the original v3 model assets
 
 Provide a directory containing the two original model directories and the old
 English character dictionary. From the repository root:
@@ -148,9 +217,10 @@ the separate OCR Debian package is retained in
 ## Protocol and tests
 
 Requests are multipart: JSON metadata then an encoded image. For example,
-`{"op":"recognize","encoding":"png","profile":"legacy_en"}` returns recognized
+`{"op":"recognize","encoding":"png","profile":"legacy_en","use_angle_cls":false}` returns recognized
 UTF-8 text. Use `"profile":"chinese"` for preset Chinese text comparisons.
 Omitting `profile` selects `legacy_en` for compatibility.
+Omitting `use_angle_cls` selects `false`; it must be a JSON boolean, not a string or number.
 `recognize_json` returns text plus line confidence/boxes. `{"op":"health"}`
 uses only a metadata frame. Errors start with `ERROR:`.
 

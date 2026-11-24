@@ -87,12 +87,13 @@ class PaddleEngine:
                 options[component + "_model_name"] = name
                 options[component + "_model_dir"] = str(directory)
         self.chinese = PaddleOCR(**options)
-        logging.info('OCR profiles ready: legacy_en=PP-OCRv3 English, use_angle_cls=false, '
+        logging.info('OCR profiles ready: legacy_en=PP-OCRv3 English, use_angle_cls=request (default false), '
                      'MKL-DNN enabled on CPU; chinese=multilingual preset text')
 
-    def recognize(self, image: np.ndarray, profile: str = 'legacy_en') -> dict[str, Any]:
+    def recognize(self, image: np.ndarray, profile: str = 'legacy_en',
+                  use_angle_cls: bool = False) -> dict[str, Any]:
         if profile == 'legacy_en':
-            return self.legacy.recognize(image)
+            return self.legacy.recognize(image, use_angle_cls=use_angle_cls)
         if profile == 'chinese':
             return normalize_results(self.chinese.predict(image))
         raise ValueError(f'Unknown OCR profile: {profile}')
@@ -114,6 +115,11 @@ def handle_request(frames: list[bytes], engine: Any) -> bytes:
         profile = header.get('profile', 'legacy_en')
         if profile not in PROFILES:
             raise ValueError(f'Unknown OCR profile: {profile}')
+        use_angle_cls = header.get('use_angle_cls', False)
+        if type(use_angle_cls) is not bool:
+            raise ValueError('use_angle_cls must be a JSON boolean')
+        if profile == 'chinese' and use_angle_cls:
+            raise ValueError('use_angle_cls is only supported by the legacy_en profile')
         if len(frames) != 2:
             raise ValueError("recognize expects a header and one image frame")
         encoded = frames[1]
@@ -122,7 +128,7 @@ def handle_request(frames: list[bytes], engine: Any) -> bytes:
         image = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError("image frame is not a supported encoded image")
-        result = engine.recognize(image, profile=profile)
+        result = engine.recognize(image, profile=profile, use_angle_cls=use_angle_cls)
         if operation == "recognize_json":
             return json.dumps(result, ensure_ascii=False).encode("utf-8")
         return result["text"].encode("utf-8")
@@ -177,11 +183,14 @@ def _worker(backend: str, identity: bytes, lang: str, device: str | None,
                 reply = handle_request(request[2:], engine)
                 socket.send_multipart([b"RESULT", *request[:2], reply])
                 try:
-                    profile = json.loads(request[2]).get('profile', 'legacy_en')
+                    header = json.loads(request[2])
+                    profile = header.get('profile', 'legacy_en')
+                    angle_cls = header.get('use_angle_cls', False)
                 except (ValueError, AttributeError, IndexError):
                     profile = 'invalid'
-                logging.info("OCR %s profile=%s completed in %.3fs", identity.decode(),
-                             profile, time.monotonic() - started)
+                    angle_cls = 'invalid'
+                logging.info("OCR %s profile=%s use_angle_cls=%s completed in %.3fs", identity.decode(),
+                             profile, angle_cls, time.monotonic() - started)
     finally:
         context.term()
 

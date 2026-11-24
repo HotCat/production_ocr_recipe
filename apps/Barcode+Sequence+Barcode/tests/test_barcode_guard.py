@@ -32,7 +32,7 @@ def service(reply):
                 ready.put(f'tcp://127.0.0.1:{port}')
                 frames = socket.recv_multipart()
                 assert len(frames) == 2
-                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': 'legacy_en'}
+                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': 'legacy_en', 'use_angle_cls': False}
                 assert cv2.imdecode(np.frombuffer(frames[1], np.uint8), cv2.IMREAD_COLOR) is not None
                 socket.send_string(reply)
                 # send() queues the reply; keep the socket alive until the client consumes it.
@@ -66,7 +66,7 @@ def main():
             if enabled:
                 command.append('--guard')
             return subprocess.run(command, text=True, capture_output=True, timeout=150,
-                                  env=dict(os.environ, PADDLEOCR_ENDPOINT=endpoint))
+                                  env=dict(os.environ, PADDLEOCR_ENDPOINT=endpoint, PADDLEOCR_USE_ANGLE_CLS='0'))
 
         # No listener exists here: guard-off, no-code and ambiguous-code cases
         # must return promptly without any OCR dependency.

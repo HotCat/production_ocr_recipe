@@ -8,10 +8,58 @@ import cv2
 import numpy as np
 
 from .import_legacy_models import import_models
-from .legacy_v3 import create_predictor, decode_ctc, detector_tensor, recognition_tensor
+from .legacy_v3 import (LegacyV3Engine, classification_tensor, create_predictor,
+                        decode_ctc, detector_tensor, orient_text, recognition_tensor)
 
 
 class LegacyTests(unittest.TestCase):
+    def test_classifier_normalization_zero_padding_and_width_limit(self):
+        tensor = classification_tensor([np.full((20, 40, 3), 255, np.uint8),
+                                        np.zeros((10, 100, 3), np.uint8)])
+        self.assertEqual(tensor.shape, (2, 3, 48, 192))
+        np.testing.assert_allclose(tensor[0, :, :, :96], 1)
+        np.testing.assert_allclose(tensor[0, :, :, 96:], 0)
+        np.testing.assert_allclose(tensor[1], -1)
+
+    def test_classifier_rotates_only_confident_180_and_preserves_order_across_batches(self):
+        # Distinct aspect ratios force width sorting, and seven regions require
+        # two batches. Pixels distinguish rotated and untouched crops.
+        images = [np.arange(12 * width * 3, dtype=np.uint8).reshape(12, width, 3)
+                  for width in (70, 10, 60, 20, 50, 30, 40)]
+        predictions = [np.array([[.01, .99], [.95, .05], [.2, .8],
+                                 [.01, .99], [.95, .05], [.95, .05]]),
+                       np.array([[.01, .99]])]
+        with patch('services.paddleocr_service.legacy_v3.run_predictor', side_effect=predictions) as run:
+            actual = orient_text(images, object())
+        self.assertEqual(run.call_count, 2)
+        for index, image in enumerate(images):
+            expected = cv2.rotate(image, cv2.ROTATE_180) if index in (1, 6, 0) else image
+            np.testing.assert_array_equal(actual[index], expected)
+
+    def test_disabled_requests_skip_classifier_and_true_loads_once_per_worker(self):
+        engine = LegacyV3Engine.__new__(LegacyV3Engine)
+        engine.detector, engine.recognizer = object(), object()
+        engine.postprocess = Mock(return_value=([[]], None))
+        engine.classifier = None
+        engine.device, engine.cpu_threads = 'cpu', 2
+        image = np.zeros((32, 32, 3), np.uint8)
+        with tempfile.TemporaryDirectory() as temporary:
+            engine.classifier_directory = Path(temporary)
+            with patch('services.paddleocr_service.legacy_v3.create_predictor') as create, \
+                 patch('services.paddleocr_service.legacy_v3.run_predictor'), \
+                 patch('services.paddleocr_service.legacy_v3.orient_text') as orient:
+                self.assertEqual(engine.recognize(image, False)['text'], '')
+                create.assert_not_called()
+                with self.assertRaisesRegex(FileNotFoundError, 'prepare_angle_classifier'):
+                    engine.recognize(image, True)
+                for name in ('inference.pdmodel', 'inference.pdiparams'):
+                    (engine.classifier_directory / name).touch()
+                engine.recognize(image, True)
+                engine.recognize(image, True)
+                engine.recognize(image, False)
+                create.assert_called_once_with(engine.classifier_directory, 'cpu', 2)
+                orient.assert_not_called()  # No text regions, no classification inference.
+
     def test_ctc_repeats_blank_spaces_case_and_dictionary_mismatch(self):
         characters = ['#', 'A', 'a', '1', ' ']
         indices = [0, 1, 1, 0, 1, 4, 2, 3, 3, 0]

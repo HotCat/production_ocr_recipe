@@ -2,7 +2,8 @@
 
 Uses the Debian C++ pipeline's BGR normalization, max-side 960 detector limit,
 DB thresholds 0.3/0.6/1.5, slow score mode, 48px recognition and 127 padding.
-Angle classification, document rotation and unwarping are never run here.
+Optional 0/180-degree text-line classification uses PaddleOCR's original mobile
+classifier. Document rotation and unwarping are never run here.
 PaddleX supplies its maintained DB contour postprocessor; model weights and
 the CTC dictionary are imported unchanged from the old installation.
 """
@@ -91,6 +92,32 @@ def recognition_tensor(images):
     return np.stack(batch)
 
 
+def classification_tensor(images):
+    """PaddleOCR's 3x48x192 BGR classifier input, normalized then zero padded."""
+    batch = np.zeros((len(images), 3, 48, 192), np.float32)
+    for index, image in enumerate(images):
+        width = min(192, math.ceil(48 * image.shape[1] / image.shape[0]))
+        resized = cv2.resize(image, (width, 48)).astype(np.float32)
+        batch[index, :, :, :width] = ((resized / 255 - .5) / .5).transpose(2, 0, 1)
+    return batch
+
+
+def orient_text(images, predictor):
+    """Correct confident upside-down lines; keep each crop paired with its box."""
+    corrected = list(images)
+    indices = sorted(range(len(images)), key=lambda i: images[i].shape[1] / images[i].shape[0])
+    for begin in range(0, len(indices), 6):
+        batch = indices[begin:begin + 6]
+        predictions = run_predictor(predictor, classification_tensor([images[i] for i in batch]))
+        if predictions.shape != (len(batch), 2):
+            raise ValueError('Angle classifier must return probabilities for 0 and 180 degrees')
+        for index, row in zip(batch, predictions):
+            label = int(row.argmax())
+            if label == 1 and float(row[label]) > .9:
+                corrected[index] = cv2.rotate(images[index], cv2.ROTATE_180)
+    return corrected
+
+
 def decode_ctc(predictions, characters):
     if predictions.shape[2] != len(characters):
         raise ValueError('PP-OCRv3 model output and English dictionary do not match')
@@ -111,10 +138,21 @@ class LegacyV3Engine:
         self.characters = ['#', *root.joinpath('en_dict.txt').read_text(encoding='utf-8').splitlines(), ' ']
         self.detector = create_predictor(root / 'ch_PP-OCRv3_det_infer', device, cpu_threads)
         self.recognizer = create_predictor(root / 'en_PP-OCRv3_rec_infer', device, cpu_threads)
+        self.classifier_directory = root / 'ch_ppocr_mobile_v2.0_cls_infer'
+        self.classifier = None
+        self.device, self.cpu_threads = device, cpu_threads
         self.postprocess = DBPostProcess(thresh=.3, box_thresh=.6, unclip_ratio=1.5,
                                          score_mode='slow', use_dilation=False)
 
-    def recognize(self, image):
+    def recognize(self, image, use_angle_cls=False):
+        if use_angle_cls and self.classifier is None:
+            # Lazy, once per worker. Disabled requests need no classifier assets;
+            # production inference never downloads models or silently ignores true.
+            if not all((self.classifier_directory / name).is_file()
+                       for name in ('inference.pdmodel', 'inference.pdiparams')):
+                raise FileNotFoundError('Angle classifier missing; run python -m '
+                                       'services.paddleocr_service.prepare_angle_classifier')
+            self.classifier = create_predictor(self.classifier_directory, self.device, self.cpu_threads)
         tensor, shape = detector_tensor(image)
         boxes, _ = self.postprocess([run_predictor(self.detector, tensor)], shape)
         # Read top-to-bottom, then left-to-right on a line, as the shared OCR
@@ -129,6 +167,9 @@ class LegacyV3Engine:
                     break
         regions = [(box, crop_text(image, box)) for box in ordered]
         regions = [(box, crop) for box, crop in regions if crop is not None]
+        if use_angle_cls and regions:
+            crops = orient_text([crop for _, crop in regions], self.classifier)
+            regions = [(box, crop) for (box, _), crop in zip(regions, crops)]
         # Width batching matches the original recognizer's batch size of six.
         indices = sorted(range(len(regions)), key=lambda i: regions[i][1].shape[1] / regions[i][1].shape[0])
         lines = [None] * len(regions)

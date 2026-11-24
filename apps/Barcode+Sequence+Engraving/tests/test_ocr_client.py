@@ -18,7 +18,7 @@ import zmq
 
 
 @contextmanager
-def peer(reply, delay=0, profile="legacy_en"):
+def peer(reply, delay=0, profile="legacy_en", use_angle_cls=False):
     ready = queue.Queue()
     errors = []
 
@@ -31,7 +31,10 @@ def peer(reply, delay=0, profile="legacy_en"):
                 ready.put(f'tcp://127.0.0.1:{port}')
                 frames = socket.recv_multipart()
                 assert len(frames) == 2
-                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': profile}
+                expected = {'op': 'recognize', 'encoding': 'png', 'profile': profile}
+                if profile == 'legacy_en':
+                    expected['use_angle_cls'] = use_angle_cls
+                assert json.loads(frames[0]) == expected, json.loads(frames[0])
                 image = cv2.imdecode(np.frombuffer(frames[1], np.uint8), cv2.IMREAD_COLOR)
                 assert image is not None and image.shape == (140, 600, 3)
                 time.sleep(delay)
@@ -67,9 +70,10 @@ def main():
             paths[text] = str(Path(directory) / (text + '.png'))
             assert cv2.imwrite(paths[text], image)
 
-        def recognize(endpoint, text='123456', timeout_ms=120000):
+        def recognize(endpoint, text='123456', timeout_ms=120000, angle_cls=False):
             environment = dict(os.environ, PADDLEOCR_ENDPOINT=endpoint,
-                               PADDLEOCR_TIMEOUT_MS=str(timeout_ms))
+                               PADDLEOCR_TIMEOUT_MS=str(timeout_ms),
+                               PADDLEOCR_USE_ANGLE_CLS='1' if angle_cls else '0')
             return subprocess.run([binary, '--ocr-image', paths[text]], env=environment,
                                   capture_output=True, text=True, timeout=150)
 
@@ -77,6 +81,12 @@ def main():
             result = recognize(endpoint)
             assert result.returncode == 0 and result.stdout.strip() == '中文 SERIAL 123456', result
         print('PASS: multipart PNG request and UTF-8 reply')
+
+        if args.profile == 'legacy_en':
+            with peer(b'SERIAL 123456', profile=args.profile, use_angle_cls=True) as endpoint:
+                result = recognize(endpoint, angle_cls=True)
+                assert result.returncode == 0 and result.stdout.strip() == 'SERIAL 123456', result
+            print('PASS: enabled angle-classification setting reaches the service as JSON true')
 
         with peer(b'ERROR: test inference failure', profile=args.profile) as endpoint:
             result = recognize(endpoint)

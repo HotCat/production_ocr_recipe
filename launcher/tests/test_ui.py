@@ -110,6 +110,16 @@ class LauncherUiTests(unittest.TestCase):
             launch.assert_not_called()
         self.assertEqual(self.store.path.read_bytes(), original)
 
+    def test_angle_classifier_stays_out_of_inspector_and_survives_save(self):
+        config = copy.deepcopy(self.store.data)
+        config['programs'][0]['use_angle_cls'] = True
+        self.store.path.write_text(json.dumps(config, ensure_ascii=False))
+        self.window.reload_button.click()
+        self.assertNotIn('use_angle_cls', self.window.editors)
+        self.window.editors['modbus_host'].setText('10.0.0.20')
+        self.window.save_button.click()
+        self.assertIs(ConfigStore(self.store.path).load()['programs'][0]['use_angle_cls'], True)
+
     def test_running_program_disables_launch_and_reenables_after_close(self):
         program = self.window.config['programs'][0]
         stop = self.root / 'stop'

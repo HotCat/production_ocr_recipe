@@ -47,7 +47,8 @@
         "modbus_host": "192.168.0.68",
         "modbus_port": 4998
       },
-      "environment": {}
+      "environment": {},
+      "use_angle_cls": false
     },
     {
       "id": "Barcode+Sequence+Barcode",
@@ -68,7 +69,8 @@
         "modbus_host": "192.168.0.68",
         "modbus_port": 4998
       },
-      "environment": {}
+      "environment": {},
+      "use_angle_cls": false
     },
     {
       "id": "Barcode+Sequence+Engraving",
@@ -89,7 +91,8 @@
         "modbus_host": "192.168.0.68",
         "modbus_port": 4998
       },
-      "environment": {}
+      "environment": {},
+      "use_angle_cls": false
     },
     {
       "id": "Engraving+Sequence",
@@ -110,7 +113,8 @@
         "modbus_host": "192.168.0.68",
         "modbus_port": 4998
       },
-      "environment": {}
+      "environment": {},
+      "use_angle_cls": false
     },
     {
       "id": "Engraving+Compare",

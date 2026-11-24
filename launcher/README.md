@@ -115,6 +115,40 @@ environment entries. Ambient display/session and SDK environment is inherited.
 To launch a custom program it must understand the environment/argument mapping
 you configure; the launcher cannot invent an interface for it.
 
+## Optional English text angle classification (JSON only)
+
+Each of the four English/serial/barcode program entries has its own boolean:
+
+```json
+"use_angle_cls": false
+```
+
+Set it to `true` alongside `id`, `values` and `environment` in the desired
+`programs` entry in `~/.config/production-ocr-launcher/config.json`. It is **not**
+an inspector `parameters`/`values` entry and adds no UI control. Omitted means
+`false`, preserving existing configurations. Save/reload preserves the flag;
+the launcher exports `PADDLEOCR_USE_ANGLE_CLS=1` or `0` for that program.
+Separate entries may select different settings while sharing the same service.
+`Engraving+Compare` / 刻字与预设文字比对 retains its Chinese OCR pipeline and
+does not have this option. Sequence `Reverse` settings are unrelated.
+
+First provision the optional classifier as described in
+[the service guide](../services/paddleocr_service/README.md#optional-angle-classification).
+For this code upgrade, rebuild the four English clients, restart the OCR
+service during a production break, and restart the launcher to load the updated
+Python code. For subsequent JSON-only edits, click **重新读取配置**, then close
+and relaunch the affected OCR program; a running process retains its setting.
+
+The launcher's **运行日志** identifies the active setting on every timed request:
+
+```text
+[PaddleOCR] status=OK request_ms=30.906 use_angle_cls=true
+```
+
+Compare warmed requests on the same production regions. The first enabled
+request on each service worker includes one-time classifier loading/warmup.
+The service also includes a repeatable latency comparison command; see its guide.
+
 ## Add a parameter without editing Python
 
 Add a definition in the top-level `parameters` object, then bind it in each

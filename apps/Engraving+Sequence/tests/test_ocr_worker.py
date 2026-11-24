@@ -30,7 +30,7 @@ def peer(replies, delay=0):
                 ready.put(f'tcp://127.0.0.1:{port}')
                 for reply in replies:
                     frames = socket.recv_multipart()
-                    assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': 'legacy_en'}
+                    assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': 'legacy_en', 'use_angle_cls': False}
                     assert len(frames) == 2
                     image = cv2.imdecode(np.frombuffer(frames[1], np.uint8), cv2.IMREAD_COLOR)
                     assert image.shape == (140, 600, 3)
@@ -69,7 +69,7 @@ def main():
 
         def run(endpoint, count, timeout_ms=120000):
             env = dict(os.environ, PADDLEOCR_ENDPOINT=endpoint,
-                       PADDLEOCR_TIMEOUT_MS=str(timeout_ms))
+                       PADDLEOCR_TIMEOUT_MS=str(timeout_ms), PADDLEOCR_USE_ANGLE_CLS='0')
             result = subprocess.run([probe, str(path), str(count)], cwd=directory,
                                     env=env, capture_output=True, text=True, timeout=40)
             assert result.returncode == 0, result

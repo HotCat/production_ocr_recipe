@@ -19,7 +19,7 @@ import zmq
 
 
 @contextmanager
-def peer(reply, delay=0, profile="legacy_en"):
+def peer(reply, delay=0, profile="legacy_en", use_angle_cls=False):
     ready = queue.Queue()
     errors = []
     done = threading.Event()
@@ -35,7 +35,10 @@ def peer(reply, delay=0, profile="legacy_en"):
                 ready.put(f'tcp://127.0.0.1:{port}')
                 frames = socket.recv_multipart()
                 assert len(frames) == 2
-                assert json.loads(frames[0]) == {'op': 'recognize', 'encoding': 'png', 'profile': profile}
+                expected = {'op': 'recognize', 'encoding': 'png', 'profile': profile}
+                if profile == 'legacy_en':
+                    expected['use_angle_cls'] = use_angle_cls
+                assert json.loads(frames[0]) == expected, json.loads(frames[0])
                 image = cv2.imdecode(np.frombuffer(frames[1], np.uint8), cv2.IMREAD_COLOR)
                 assert image is not None and image.shape == (140, 600, 3)
                 time.sleep(delay)
@@ -75,16 +78,19 @@ def main():
             paths[text] = str(Path(directory) / (text + '.png'))
             assert cv2.imwrite(paths[text], image)
 
-        def recognize(endpoint, text='123456', timeout_ms=120000):
+        def recognize(endpoint, text='123456', timeout_ms=120000, angle_cls=False):
             environment = dict(os.environ, PADDLEOCR_ENDPOINT=endpoint,
-                               PADDLEOCR_TIMEOUT_MS=str(timeout_ms))
+                               PADDLEOCR_TIMEOUT_MS=str(timeout_ms),
+                               PADDLEOCR_USE_ANGLE_CLS='1' if angle_cls else '0')
             return subprocess.run([binary, '--ocr-image', paths[text]], env=environment,
                                   capture_output=True, text=True, timeout=150)
 
-        def timing(result, expected):
-            matches = re.findall(r'^\[PaddleOCR\] status=(\w+) request_ms=(\d+\.\d+)$',
+        def timing(result, expected, angle_cls=False):
+            matches = re.findall(r'^\[PaddleOCR\] status=(\w+) request_ms=(\d+\.\d+)(?: use_angle_cls=(?:true|false|invalid))?$',
                                  result.stderr, re.MULTILINE)
             assert len(matches) == 1 and matches[0][0] == expected, result
+            if args.profile == 'legacy_en':
+                assert 'use_angle_cls=' + str(angle_cls).lower() in result.stderr, result
             return float(matches[0][1])
 
         with peer('中文 SERIAL 123456'.encode('utf-8'), delay=0.12, profile=args.profile) as endpoint:
@@ -92,6 +98,13 @@ def main():
             assert result.returncode == 0 and result.stdout.strip() == '中文 SERIAL 123456', result
             assert timing(result, 'OK') >= 100, result
         print('PASS: multipart PNG request, UTF-8 reply and elapsed timing including service delay')
+
+        if args.profile == 'legacy_en':
+            with peer(b'SERIAL 123456', profile=args.profile, use_angle_cls=True) as endpoint:
+                result = recognize(endpoint, angle_cls=True)
+                assert result.returncode == 0 and result.stdout.strip() == 'SERIAL 123456', result
+                timing(result, 'OK', angle_cls=True)
+            print('PASS: enabled angle-classification setting reaches the service as JSON true')
 
         with peer(b'', profile=args.profile) as endpoint:
             result = recognize(endpoint)

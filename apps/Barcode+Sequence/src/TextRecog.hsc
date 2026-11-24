@@ -32,7 +32,7 @@ import OpenCV.TypeLevel
 import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
 import Control.Monad
-import OcrTiming (timeOcrRequest)
+import OcrTiming (timeOcrRequestWithAngleCls)
 import Control.Monad.Trans.Except (Except)
 import Control.Concurrent.STM
 import qualified Control.Exception as E
@@ -72,7 +72,15 @@ static char* requestPaddleOcr(const cv::Mat& image, const char* endpoint) {
     socket.set(zmq::sockopt::rcvtimeo, replyTimeoutMs);
     socket.connect(endpoint);
 
-    const std::string header = "{\"op\":\"recognize\",\"encoding\":\"png\",\"profile\":\"legacy_en\"}";
+    bool useAngleCls = false;
+    if (const char* setting = std::getenv("PADDLEOCR_USE_ANGLE_CLS")) {
+      if (std::strcmp(setting, "1") == 0 || std::strcmp(setting, "true") == 0)
+        useAngleCls = true;
+      else if (std::strcmp(setting, "0") != 0 && std::strcmp(setting, "false") != 0)
+        throw std::runtime_error("PADDLEOCR_USE_ANGLE_CLS must be 0, 1, false or true");
+    }
+    const std::string header = std::string("{\"op\":\"recognize\",\"encoding\":\"png\",\"profile\":\"legacy_en\",\"use_angle_cls\":")
+      + (useAngleCls ? "true}" : "false}");
     if (!socket.send(zmq::buffer(header), zmq::send_flags::sndmore) ||
         !socket.send(zmq::buffer(png), zmq::send_flags::none)) {
       throw std::runtime_error("timed out sending to the PaddleOCR service");
@@ -101,7 +109,7 @@ prepareOcr = PPOCR . fromMaybe "tcp://127.0.0.1:5555" <$> lookupEnv "PADDLEOCR_E
 
 -- Use the shared service through the endpoint prepared at startup.
 predictOcr :: (Mat ('S ['D, 'D]) ('S 3) ('S Word8)) -> PPOCR -> IO String
-predictOcr img ocr = timeOcrRequest $ do
+predictOcr img ocr = timeOcrRequestWithAngleCls $ do
   let endpoint = ppoEndpoint ocr
   -- A safe FFI call lets other Haskell threads run while ZeroMQ waits.
   let request = withPtr img $ \imgPtr -> withCString endpoint $ \endpointPtr ->

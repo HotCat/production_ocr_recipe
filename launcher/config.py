@@ -14,6 +14,10 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 ENVIRONMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 TYPES = {"string", "choice", "integer", "boolean"}
+LEGACY_OCR_PROGRAMS = {
+    "Barcode+Sequence", "Barcode+Sequence+Barcode",
+    "Barcode+Sequence+Engraving", "Engraving+Sequence",
+}
 
 
 def atomic_json(path: Path, data: dict) -> None:
@@ -102,6 +106,8 @@ def validate_config(config: dict) -> None:
         if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_+.-]+", identity) or identity in identities:
             raise ValueError("程序 ID 不能为空或重复")
         identities.add(identity)
+        if type(program.get("use_angle_cls", False)) is not bool:
+            raise ValueError(f"{identity}: use_angle_cls 必须是 true 或 false")
         if not isinstance(program.get("name"), str) or not program["name"].strip():
             raise ValueError(f"{identity}: 程序名称不能为空")
         command = program.get("command")
@@ -184,6 +190,14 @@ def launch_spec(config: dict, program: dict, repository: Path = REPOSITORY) -> d
     if type(enabled) is not bool:
         raise ValueError("debug_mode 必须是 true 或 false")
     environment["OCR_DEBUG_MODE"] = "1" if enabled else "0"
+    # JSON-only OCR setting, deliberately outside the inspector's parameters.
+    # Send an explicit false for older configs so ambient shell variables cannot
+    # silently enable extra inference. Identify aliases through their instance key.
+    if program.get("instance_key", program["id"]) in LEGACY_OCR_PROGRAMS:
+        angle_cls = program.get("use_angle_cls", False)
+        if type(angle_cls) is not bool:
+            raise ValueError("use_angle_cls 必须是 true 或 false")
+        environment["PADDLEOCR_USE_ANGLE_CLS"] = "1" if angle_cls else "0"
     command = [expand(token) for token in program["command"]]
     directory = Path(expand(program["cwd"])).expanduser()
     if not directory.is_absolute():

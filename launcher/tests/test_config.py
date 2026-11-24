@@ -78,6 +78,30 @@ class ConfigurationTests(unittest.TestCase):
                 self.store.update(config)
             self.assertEqual(self.path.read_bytes(), before)
 
+    def test_angle_classifier_is_independent_json_only_and_defaults_off(self):
+        programs = self.config['programs']
+        for program in programs[:4]:
+            self.assertIs(program['use_angle_cls'], False)
+            self.assertNotIn('use_angle_cls', program['parameters'])
+            program['environment']['PADDLEOCR_USE_ANGLE_CLS'] = '1'
+            self.assertEqual(launch_spec(self.config, program)['environment']['PADDLEOCR_USE_ANGLE_CLS'], '0')
+        programs[0]['use_angle_cls'] = True
+        self.store.update(self.config)
+        restored = ConfigStore(self.path).load()
+        for index, program in enumerate(restored['programs'][:4]):
+            self.assertEqual(launch_spec(restored, program)['environment']['PADDLEOCR_USE_ANGLE_CLS'],
+                             '1' if index == 0 else '0')
+        self.assertNotIn('use_angle_cls', programs[4])
+        self.assertNotIn('PADDLEOCR_USE_ANGLE_CLS', launch_spec(self.config, programs[4])['environment'])
+        programs[0].pop('use_angle_cls')
+        self.assertEqual(launch_spec(self.config, programs[0])['environment']['PADDLEOCR_USE_ANGLE_CLS'], '0')
+        for invalid in ('true', 1, None):
+            programs[0]['use_angle_cls'] = invalid
+            with self.assertRaisesRegex(ValueError, 'use_angle_cls'):
+                validate_config(self.config)
+            with self.assertRaisesRegex(ValueError, 'use_angle_cls'):
+                launch_spec(self.config, programs[0])
+
     def test_external_program_list_edits_are_not_overwritten(self):
         config = copy.deepcopy(self.config)
         config['programs'].pop()
