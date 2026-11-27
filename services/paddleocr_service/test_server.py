@@ -234,7 +234,8 @@ class PoolEngine:
                 self.state['active'].value -= 1
 
 
-def pool_request(endpoint, marker=None, operation='recognize', profile='legacy_en', use_angle_cls=False):
+def pool_request(endpoint, marker=None, operation='recognize', profile='legacy_en', use_angle_cls=False,
+                 dispatch='cpu'):
     import cv2
     import zmq
     context = zmq.Context()
@@ -244,7 +245,7 @@ def pool_request(endpoint, marker=None, operation='recognize', profile='legacy_e
             socket.setsockopt(zmq.RCVTIMEO, 10000)
             socket.connect(endpoint)
             frames = [json.dumps({'op': operation, 'profile': profile,
-                                  'use_angle_cls': use_angle_cls}).encode()]
+                                  'use_angle_cls': use_angle_cls, 'dispatch': dispatch}).encode()]
             if marker is not None:
                 ok, png = cv2.imencode('.png', np.full((8, 8, 3), marker, np.uint8))
                 assert ok
@@ -284,13 +285,76 @@ class WorkerPoolTests(unittest.TestCase):
         self.thread = threading.Thread(target=run)
         self.thread.start()
         endpoint = self.ready.get(timeout=10)
-        for _ in range(workers):
+        expected = workers + (1 if options.get('gpu_factory') else 0)
+        for _ in range(expected):
             event = self.state['events'].get(timeout=5)
             self.assertEqual(event[0], 'ready')
-            self.assertEqual(event[2:], ('en', 'cpu', 2))
+            self.assertIn(event[2:], [('en', 'cpu', 2), ('en', 'gpu:0', 2)])
+            if event[3] == 'gpu:0':
+                self.gpu_pid = event[1]
             self.pids.append(event[1])
-        self.assertEqual(len(set(self.pids)), workers)
+        self.assertEqual(len(set(self.pids)), expected)
         return endpoint
+
+    def start_mixed_pool(self):
+        import functools
+        endpoint = self.start_pool(gpu_factory=functools.partial(PoolEngine, self.state))
+        import time
+        deadline = time.monotonic() + 5
+        while json.loads(pool_request(endpoint, operation='status'))['gpu'] != 'ready':
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.01)
+        return endpoint
+
+    def test_cpu_gpu_and_auto_routing_is_serial_per_worker_and_independent(self):
+        import concurrent.futures
+        import queue
+        self.state['gates'] = {marker: self.spawn.Event() for marker in (31, 97)}
+        endpoint = self.start_mixed_pool()
+        with concurrent.futures.ThreadPoolExecutor(3) as clients:
+            gpu = clients.submit(pool_request, endpoint, 31, dispatch='gpu')
+            event = self.state['events'].get(timeout=5)
+            self.assertEqual(event[2], self.gpu_pid)
+            automatic = clients.submit(pool_request, endpoint, 97, dispatch='auto')
+            # A busy ready GPU queues auto work; idle CPU workers do not steal it.
+            with self.assertRaises(queue.Empty):
+                self.state['events'].get(timeout=.15)
+            self.assertEqual(pool_request(endpoint, 207, dispatch='cpu'), '207')
+            event = self.state['events'].get(timeout=5)
+            self.assertNotEqual(event[2], self.gpu_pid)
+            self.state['gates'][31].set()
+            self.assertEqual(gpu.result(timeout=5), '31')
+            event = self.state['events'].get(timeout=5)
+            self.assertEqual(event[1:3], (97, self.gpu_pid))
+            self.state['gates'][97].set()
+            self.assertEqual(automatic.result(timeout=5), '97')
+        self.assertFalse(self.errors)
+
+    def test_missing_gpu_is_explicit_and_auto_falls_back_to_cpu(self):
+        endpoint = self.start_pool()
+        self.assertIn('GPU worker unavailable', pool_request(endpoint, 31, dispatch='gpu'))
+        self.assertEqual(pool_request(endpoint, 31, dispatch='auto'), '31')
+        self.assertIn('dispatch must', pool_request(endpoint, 31, dispatch='cuda'))
+        status = json.loads(pool_request(endpoint, operation='status'))
+        self.assertEqual(status['gpu'], 'unavailable')
+        self.assertEqual(len(status['workers']), 2)
+        self.assertFalse(self.errors)
+
+    def test_invalid_optional_gpu_interpreter_keeps_cpu_service_available(self):
+        endpoint = self.start_pool(gpu_python='/nonexistent/production-ocr-gpu/python')
+        self.assertEqual(pool_request(endpoint, 31, dispatch='auto'), '31')
+        self.assertIn('GPU worker unavailable', pool_request(endpoint, 97, dispatch='gpu'))
+        self.assertEqual(json.loads(pool_request(endpoint, operation='status'))['gpu'], 'unavailable')
+        self.assertFalse(self.errors)
+
+    def test_gpu_crash_does_not_replay_or_stop_cpu_workers(self):
+        endpoint = self.start_mixed_pool()
+        self.assertIn('request was not replayed', pool_request(endpoint, 250, dispatch='gpu'))
+        self.assertEqual(pool_request(endpoint, 31, dispatch='auto'), '31')
+        self.assertEqual(pool_request(endpoint, 97, dispatch='cpu'), '97')
+        self.assertIn('GPU worker unavailable', pool_request(endpoint, 31, dispatch='gpu'))
+        self.assertEqual(json.loads(pool_request(endpoint, operation='status'))['gpu'], 'unavailable')
+        self.assertFalse(self.errors)
 
     def tearDown(self):
         import os

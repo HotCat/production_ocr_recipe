@@ -86,7 +86,14 @@ static char* requestPaddleOcr(const cv::Mat& image, const char* endpoint) {
     socket.set(zmq::sockopt::rcvtimeo, replyTimeoutMs);
     socket.connect(endpoint);
 
-    const std::string header = "{\"op\":\"recognize\",\"encoding\":\"png\",\"profile\":\"chinese\"}";
+    std::string header = "{\"op\":\"recognize\",\"encoding\":\"png\",\"profile\":\"chinese\"}";
+    const char* dispatch = std::getenv("PADDLEOCR_DISPATCH");
+    if (!dispatch) dispatch = "cpu";
+    if (std::strcmp(dispatch, "cpu") != 0 && std::strcmp(dispatch, "gpu") != 0 &&
+        std::strcmp(dispatch, "auto") != 0)
+      throw std::runtime_error("PADDLEOCR_DISPATCH must be cpu, gpu or auto");
+    header.pop_back();
+    header += std::string(",\"dispatch\":\"") + dispatch + "\"}";
     if (!socket.send(zmq::buffer(header), zmq::send_flags::sndmore) ||
         !socket.send(zmq::buffer(png), zmq::send_flags::none)) {
       throw std::runtime_error("timed out sending to the PaddleOCR service");

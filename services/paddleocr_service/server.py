@@ -6,6 +6,7 @@ import logging
 import multiprocessing
 import os
 import signal
+import subprocess
 import threading
 import time
 from collections import deque
@@ -189,8 +190,8 @@ def _worker(backend: str, identity: bytes, lang: str, device: str | None,
                 except (ValueError, AttributeError, IndexError):
                     profile = 'invalid'
                     angle_cls = 'invalid'
-                logging.info("OCR %s profile=%s use_angle_cls=%s completed in %.3fs", identity.decode(),
-                             profile, angle_cls, time.monotonic() - started)
+                logging.info("OCR %s device=%s profile=%s use_angle_cls=%s completed in %.3fs", identity.decode(),
+                             device, profile, angle_cls, time.monotonic() - started)
     finally:
         context.term()
 
@@ -207,26 +208,38 @@ def _send_reply(frontend: zmq.Socket, route: list[bytes], reply: bytes) -> None:
 
 def serve(endpoint: str, lang: str, device: str | None = "cpu", workers: int = 2,
           cpu_threads: int = 2, *, stop: Any = None, ready: Any = None,
-          engine_factory: Any = PaddleEngine, startup_timeout: float = 300) -> None:
-    """Route REQ clients to at most two independent, serial model processes.
+          engine_factory: Any = PaddleEngine, startup_timeout: float = 300,
+          gpu_python: str | None = None, gpu_mode: str = "auto",
+          gpu_factory: Any = None) -> None:
+    """Two CPU workers plus an optional isolated, serial GPU worker.
 
-    Only read another client request when a worker is idle. Excess work stays
-    in ZeroMQ's bounded queues rather than an unbounded Python task queue.
-    A failed worker fails the pool so the supervisor can restart it cleanly.
-    The optional stop/ready/factory arguments support hardware-free tests.
+    Requests select cpu/gpu/auto. Auto prefers a ready GPU and otherwise CPU;
+    once selected, busy workers queue requests rather than switching devices.
+    A bounded queue prevents unlimited decoded-image/request accumulation.
+    GPU loss fails its active/queued requests, leaves CPU workers available,
+    and never silently replays a production inspection.
     """
     if not 1 <= workers <= MAX_WORKERS:
         raise ValueError(f"workers must be between 1 and {MAX_WORKERS}")
     if cpu_threads < 1:
         raise ValueError("cpu_threads must be positive")
+    if gpu_mode not in ("off", "auto", "required"):
+        raise ValueError("gpu_mode must be off, auto or required")
+    if gpu_mode == "required" and not (gpu_python or gpu_factory):
+        raise ValueError("GPU runtime is required but not configured")
     spawn = multiprocessing.get_context("spawn")
     worker_stop = spawn.Event()
     stop = stop if stop is not None else threading.Event()
     context = zmq.Context()
     processes = {}
+    devices = {}
     idle: deque[bytes] = deque()
     initialized = set()
     inflight: dict[bytes, list[bytes]] = {}
+    pending = {"cpu": deque(), "gpu": deque()}
+    gpu_process = None
+    gpu_id = b"gpu-worker-1"
+    gpu_state = "disabled"
     frontend = context.socket(zmq.ROUTER)
     backend = context.socket(zmq.ROUTER)
     try:
@@ -236,7 +249,6 @@ def serve(endpoint: str, lang: str, device: str | None = "cpu", workers: int = 2
             socket.setsockopt(zmq.RCVHWM, 8)
             socket.setsockopt(zmq.SNDHWM, 8)
         frontend.setsockopt(zmq.ROUTER_MANDATORY, 1)
-        # Reserve the public endpoint before loading any model instances.
         frontend.bind(endpoint)
         endpoint = frontend.getsockopt_string(zmq.LAST_ENDPOINT)
         backend.bind("tcp://127.0.0.1:*")
@@ -249,6 +261,46 @@ def serve(endpoint: str, lang: str, device: str | None = "cpu", workers: int = 2
                       worker_stop, engine_factory))
             process.start()
             processes[identity] = process
+            devices[identity] = "gpu" if device and device.startswith("gpu") else "cpu"
+        if gpu_mode != "off" and (gpu_python or gpu_factory):
+            gpu_state = "starting"
+            devices[gpu_id] = "gpu"
+            if gpu_factory is not None:  # Injectable spawn path for routing tests.
+                process = spawn.Process(target=_worker, name=gpu_id.decode(), daemon=True,
+                    args=(backend_endpoint, gpu_id, lang, "gpu:0", cpu_threads,
+                          worker_stop, gpu_factory))
+                process.start()
+                processes[gpu_id] = process
+            else:
+                try:
+                    gpu_process = subprocess.Popen([
+                        gpu_python, "-u", "-m", "services.paddleocr_service.gpu_worker",
+                        "--backend", backend_endpoint, "--identity", gpu_id.decode(),
+                        "--cpu-threads", str(cpu_threads)],
+                        cwd=Path(__file__).resolve().parents[2])
+                except OSError as failure:
+                    gpu_state = "unavailable"
+                    if gpu_mode == "required":
+                        raise RuntimeError("Cannot start required GPU runtime") from failure
+                    logging.error("Cannot start optional GPU runtime: %s", failure)
+        elif gpu_mode != "off":
+            gpu_state = "unavailable"
+
+        def lose_gpu(reason):
+            nonlocal gpu_state
+            gpu_state = "unavailable"
+            logging.error("GPU worker unavailable: %s; CPU workers remain available", reason)
+            initialized.discard(gpu_id)
+            while gpu_id in idle:
+                idle.remove(gpu_id)
+            if gpu_id in inflight:
+                _send_reply(frontend, inflight.pop(gpu_id),
+                            b"ERROR: GPU worker stopped during inference; request was not replayed")
+            while pending["gpu"]:
+                request = pending["gpu"].popleft()
+                _send_reply(frontend, request[:2], b"ERROR: GPU worker unavailable")
+            if gpu_mode == "required":
+                raise RuntimeError("Required GPU worker unavailable: " + reason)
 
         poller = zmq.Poller()
         poller.register(backend, zmq.POLLIN)
@@ -258,17 +310,32 @@ def serve(endpoint: str, lang: str, device: str | None = "cpu", workers: int = 2
         while not stop.is_set():
             for identity, process in processes.items():
                 if process.exitcode is not None:
-                    raise RuntimeError(f"OCR {identity.decode()} exited ({process.exitcode})")
-            all_ready = len(initialized) == workers
-            if not all_ready and time.monotonic() >= deadline:
-                raise TimeoutError("OCR workers did not initialize before the startup deadline")
-            if all_ready and not announced:
-                logging.info("PaddleOCR service listening at %s; %s model workers, "
-                             "CPU threads per worker=%s", endpoint, workers, cpu_threads)
+                    if identity == gpu_id:
+                        if gpu_state not in ("unavailable", "disabled"):
+                            lose_gpu(f"exited ({process.exitcode})")
+                    else:
+                        raise RuntimeError(f"OCR {identity.decode()} exited ({process.exitcode})")
+            if gpu_process is not None and gpu_process.poll() is not None and gpu_state != "unavailable":
+                lose_gpu(f"exited ({gpu_process.returncode})")
+            cpu_ready = all(identity in initialized for identity in processes if identity != gpu_id)
+            if time.monotonic() >= deadline:
+                if not cpu_ready:
+                    raise TimeoutError("OCR workers did not initialize before the startup deadline")
+                if gpu_state == "starting":
+                    lose_gpu("startup deadline exceeded")
+                    if gpu_process is not None:
+                        gpu_process.terminate()
+                    elif gpu_id in processes and processes[gpu_id].is_alive():
+                        processes[gpu_id].terminate()
+            if cpu_ready and not announced and (gpu_mode != "required" or gpu_state == "ready"):
+                logging.info("PaddleOCR service listening at %s; %s base workers, GPU=%s; "
+                             "CPU threads per worker=%s", endpoint, workers, gpu_state, cpu_threads)
                 announced = True
                 if ready is not None:
                     ready.put(endpoint)
-            can_accept = all_ready and bool(idle)
+            # A bounded pool queue allows a CPU request to pass a busy GPU and
+            # vice versa. Each worker still executes exactly one request at a time.
+            can_accept = announced and sum(map(len, pending.values())) < 8
             if can_accept and not accepting:
                 poller.register(frontend, zmq.POLLIN)
             elif accepting and not can_accept:
@@ -278,10 +345,15 @@ def serve(endpoint: str, lang: str, device: str | None = "cpu", workers: int = 2
             if backend in events:
                 message = backend.recv_multipart()
                 identity, frames = message[0], message[1:]
-                if identity not in processes:
+                if identity not in devices:
                     raise RuntimeError("Unknown OCR worker")
+                if identity == gpu_id and gpu_state == "unavailable":
+                    continue
                 if frames == [b"READY"] and identity not in initialized:
                     initialized.add(identity)
+                    if identity == gpu_id:
+                        gpu_state = "ready"
+                        logging.info("GPU worker ready; dispatch=gpu/auto is available")
                 elif (len(frames) == 4 and frames[0] == b"RESULT"
                       and identity in inflight and frames[1:3] == inflight[identity]):
                     _send_reply(frontend, inflight.pop(identity), frames[3])
@@ -290,18 +362,57 @@ def serve(endpoint: str, lang: str, device: str | None = "cpu", workers: int = 2
                 idle.append(identity)
             if frontend in events:
                 request = frontend.recv_multipart()
-                # Existing REQ clients supply [routing-id, empty, header, image].
                 if len(request) < 3 or request[1] != b"":
                     logging.warning("Discarded request without a REQ routing envelope")
                     continue
-                identity = idle.popleft()
-                inflight[identity] = request[:2]
-                backend.send_multipart([identity, *request])
+                try:
+                    header = json.loads(request[2])
+                    if not isinstance(header, dict):
+                        raise ValueError("Request header must be a JSON object")
+                    operation = header.get("op")
+                    if operation == "health":
+                        _send_reply(frontend, request[:2], b'{"ok":true,"service":"paddleocr"}')
+                        continue
+                    if operation == "status":
+                        status = {"ok": True, "service": "paddleocr", "gpu": gpu_state,
+                                  "workers": [{"id": ident.decode(), "device": devices[ident],
+                                               "busy": ident in inflight}
+                                              for ident in sorted(initialized)],
+                                  "queued": {key: len(value) for key, value in pending.items()}}
+                        _send_reply(frontend, request[:2], json.dumps(status).encode())
+                        continue
+                    dispatch = header.get("dispatch", "cpu")
+                    if dispatch not in ("cpu", "gpu", "auto"):
+                        raise ValueError("dispatch must be cpu, gpu or auto")
+                    selected = "gpu" if dispatch == "auto" and gpu_state == "ready" else dispatch
+                    if selected == "auto":
+                        selected = "cpu"
+                    available = any(value == selected and (ident != gpu_id or gpu_state == "ready")
+                                    for ident, value in devices.items())
+                    if selected == "gpu" and not available and gpu_state != "starting":
+                        raise ValueError("GPU worker unavailable; choose cpu or auto")
+                    if selected == "cpu" and not available:
+                        raise ValueError("CPU worker unavailable")
+                    pending[selected].append(request)
+                except (ValueError, TypeError, AttributeError) as failure:
+                    _send_reply(frontend, request[:2], ("ERROR: " + str(failure)).encode())
+            for identity in list(idle):
+                queue = pending[devices[identity]]
+                if queue:
+                    request = queue.popleft()
+                    idle.remove(identity)
+                    inflight[identity] = request[:2]
+                    logging.debug("Dispatch request to %s device=%s", identity.decode(), devices[identity])
+                    backend.send_multipart([identity, *request])
     finally:
+        for queue in pending.values():
+            for request in queue:
+                _send_reply(frontend, request[:2], b"ERROR: OCR service is stopping; retry after restart")
         for route in inflight.values():
             _send_reply(frontend, route, b"ERROR: OCR service is stopping; retry after restart")
         worker_stop.set()
-        # Use one shared grace period, including when a worker is in inference.
+        if gpu_process is not None and gpu_process.poll() is None:
+            gpu_process.terminate()
         deadline = time.monotonic() + 5
         for process in processes.values():
             process.join(timeout=max(0, deadline - time.monotonic()))
@@ -314,6 +425,12 @@ def serve(endpoint: str, lang: str, device: str | None = "cpu", workers: int = 2
                 process.kill()
                 process.join(timeout=2)
             process.close()
+        if gpu_process is not None:
+            try:
+                gpu_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                gpu_process.kill()
+                gpu_process.wait(timeout=2)
         frontend.close()
         backend.close()
         context.term()
@@ -329,6 +446,11 @@ def main() -> None:
                         default=os.getenv("PADDLEOCR_WORKERS", "2"))
     parser.add_argument("--cpu-threads", type=int,
                         default=os.getenv("PADDLEOCR_CPU_THREADS", "2"))
+    default_gpu = Path(__file__).parent / '.venv-gpu' / 'bin' / 'python'
+    parser.add_argument("--gpu-python", default=os.getenv("PADDLEOCR_GPU_PYTHON",
+                        str(default_gpu) if default_gpu.exists() else None))
+    parser.add_argument("--gpu-mode", choices=("off", "auto", "required"),
+                        default=os.getenv("PADDLEOCR_GPU_MODE", "auto"))
     args = parser.parse_args()
     # argparse does not check choices for an environment-supplied default.
     if not 1 <= args.workers <= MAX_WORKERS or args.cpu_threads < 1:
@@ -337,7 +459,8 @@ def main() -> None:
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda _signum, _frame: stop.set())
-    serve(args.bind, args.lang, args.device, args.workers, args.cpu_threads, stop=stop)
+    serve(args.bind, args.lang, args.device, args.workers, args.cpu_threads, stop=stop,
+          gpu_python=args.gpu_python, gpu_mode=args.gpu_mode)
 
 
 if __name__ == "__main__":

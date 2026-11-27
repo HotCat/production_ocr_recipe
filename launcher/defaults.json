@@ -48,7 +48,8 @@
         "modbus_port": 4998
       },
       "environment": {},
-      "use_angle_cls": false
+      "use_angle_cls": false,
+      "ocr_dispatch": "cpu"
     },
     {
       "id": "Barcode+Sequence+Barcode",
@@ -70,7 +71,8 @@
         "modbus_port": 4998
       },
       "environment": {},
-      "use_angle_cls": false
+      "use_angle_cls": false,
+      "ocr_dispatch": "cpu"
     },
     {
       "id": "Barcode+Sequence+Engraving",
@@ -92,7 +94,8 @@
         "modbus_port": 4998
       },
       "environment": {},
-      "use_angle_cls": false
+      "use_angle_cls": false,
+      "ocr_dispatch": "cpu"
     },
     {
       "id": "Engraving+Sequence",
@@ -114,7 +117,8 @@
         "modbus_port": 4998
       },
       "environment": {},
-      "use_angle_cls": false
+      "use_angle_cls": false,
+      "ocr_dispatch": "cpu"
     },
     {
       "id": "Engraving+Compare",
@@ -135,7 +139,8 @@
         "modbus_host": "192.168.0.68",
         "modbus_port": 4998
       },
-      "environment": {}
+      "environment": {},
+      "ocr_dispatch": "auto"
     }
   ]
 }

@@ -1,8 +1,12 @@
 # Shared PaddleOCR service
 
-A ZeroMQ broker routes independent REQ clients to **two CPU worker processes**.
+A ZeroMQ broker routes independent REQ clients to **two CPU worker processes**
+and an optional **one serial NVIDIA GPU worker** in an isolated runtime.
+Per-app JSON `ocr_dispatch` selects `cpu`, `gpu` or `auto`; old clients default
+to CPU. See [GPU dispatch and offline deployment](../../docs/GPU_OCR_DEPLOYMENT.md)
+for setup, failure behavior, benchmarking and the portable CUDA/model bundle.
 Each spawned worker owns both OCR profiles and runs requests serially;
-up to **two requests run concurrently** across the service. Further requests
+up to **two CPU requests plus one GPU request run concurrently** across the service. Further requests
 wait until a worker becomes idle. Replies return to the requesting client,
 including when requests finish out of order. There is no strict FIFO order
 across peers. Each client thread/process must use its own socket. Client timeouts
@@ -37,7 +41,8 @@ semantics. Chinese profile preprocessing and acceptance rules are unchanged.
 
 Each worker loads both profiles **once**, then selects the appropriate existing
 predictors for each request. It never runs either profile concurrently inside
-that worker. Two workers still allow at most two concurrent requests overall;
+that worker. The two CPU workers allow at most two concurrent CPU requests;
+the optional GPU worker adds one concurrent GPU request. All
 queued requests and profile choices retain their correct reply routes. Worker
 limits apply to the whole service, not separately to each profile.
 

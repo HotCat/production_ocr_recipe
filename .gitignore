@@ -3,6 +3,7 @@ dist-newstyle/
 build/
 **/bin/
 **/.venv/
+**/.venv-gpu/
 **/.cache/
 **/__pycache__/
 *.pyc

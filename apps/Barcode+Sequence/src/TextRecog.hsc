@@ -79,8 +79,15 @@ static char* requestPaddleOcr(const cv::Mat& image, const char* endpoint) {
       else if (std::strcmp(setting, "0") != 0 && std::strcmp(setting, "false") != 0)
         throw std::runtime_error("PADDLEOCR_USE_ANGLE_CLS must be 0, 1, false or true");
     }
-    const std::string header = std::string("{\"op\":\"recognize\",\"encoding\":\"png\",\"profile\":\"legacy_en\",\"use_angle_cls\":")
+    std::string header = std::string("{\"op\":\"recognize\",\"encoding\":\"png\",\"profile\":\"legacy_en\",\"use_angle_cls\":")
       + (useAngleCls ? "true}" : "false}");
+    const char* dispatch = std::getenv("PADDLEOCR_DISPATCH");
+    if (!dispatch) dispatch = "cpu";
+    if (std::strcmp(dispatch, "cpu") != 0 && std::strcmp(dispatch, "gpu") != 0 &&
+        std::strcmp(dispatch, "auto") != 0)
+      throw std::runtime_error("PADDLEOCR_DISPATCH must be cpu, gpu or auto");
+    header.pop_back();
+    header += std::string(",\"dispatch\":\"") + dispatch + "\"}";
     if (!socket.send(zmq::buffer(header), zmq::send_flags::sndmore) ||
         !socket.send(zmq::buffer(png), zmq::send_flags::none)) {
       throw std::runtime_error("timed out sending to the PaddleOCR service");

@@ -113,12 +113,15 @@ class LauncherUiTests(unittest.TestCase):
     def test_angle_classifier_stays_out_of_inspector_and_survives_save(self):
         config = copy.deepcopy(self.store.data)
         config['programs'][0]['use_angle_cls'] = True
+        config['programs'][0]['ocr_dispatch'] = 'gpu'
         self.store.path.write_text(json.dumps(config, ensure_ascii=False))
         self.window.reload_button.click()
         self.assertNotIn('use_angle_cls', self.window.editors)
+        self.assertNotIn('ocr_dispatch', self.window.editors)
         self.window.editors['modbus_host'].setText('10.0.0.20')
         self.window.save_button.click()
         self.assertIs(ConfigStore(self.store.path).load()['programs'][0]['use_angle_cls'], True)
+        self.assertEqual(ConfigStore(self.store.path).load()['programs'][0]['ocr_dispatch'], 'gpu')
 
     def test_running_program_disables_launch_and_reenables_after_close(self):
         program = self.window.config['programs'][0]

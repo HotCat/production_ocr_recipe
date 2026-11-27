@@ -98,10 +98,13 @@ Use an existing compatible service by setting `PADDLEOCR_ENDPOINT`, or create a
 separate Python environment from [services/paddleocr_service/README.md](services/paddleocr_service/README.md).
 Models are downloaded/prepared separately and are not committed. Multiple
 clients share one service; its ZeroMQ broker routes requests to two independent
-CPU model workers, with at most two inferences running concurrently. Additional
+CPU model workers, plus one optional serial NVIDIA GPU worker. Up to two CPU
+inferences and one GPU inference can run concurrently. Additional
 requests wait for a free worker. Each worker defaults to two CPU threads;
 `PADDLEOCR_WORKERS=1` selects serial fallback. A client reply timeout includes
-queue time.
+queue time. Per-app JSON `ocr_dispatch` selects `cpu`, `gpu` or `auto` without
+adding operator UI controls. See [GPU dispatch and offline deployment](docs/GPU_OCR_DEPLOYMENT.md)
+for the isolated CUDA runtime and portable service/model bundle.
 
 Each request selects its model profile. `Engraving+Compare` uses the existing
 Chinese-capable pipeline; the other four applications use the original

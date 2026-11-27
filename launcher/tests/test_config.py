@@ -102,6 +102,21 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'use_angle_cls'):
                 launch_spec(self.config, programs[0])
 
+    def test_dispatch_is_json_only_independent_and_authoritative(self):
+        for program in self.config['programs']:
+            self.assertNotIn('ocr_dispatch', program['parameters'])
+            for dispatch in ('cpu', 'gpu', 'auto'):
+                program['ocr_dispatch'] = dispatch
+                program['environment']['PADDLEOCR_DISPATCH'] = 'wrong'
+                validate_config(self.config)
+                self.assertEqual(launch_spec(self.config, program)['environment']['PADDLEOCR_DISPATCH'], dispatch)
+            program.pop('ocr_dispatch')
+            self.assertEqual(launch_spec(self.config, program)['environment']['PADDLEOCR_DISPATCH'], 'cpu')
+        for invalid in ('cuda', '', True, None, []):
+            self.config['programs'][0]['ocr_dispatch'] = invalid
+            with self.assertRaisesRegex(ValueError, 'ocr_dispatch'):
+                validate_config(self.config)
+
     def test_external_program_list_edits_are_not_overwritten(self):
         config = copy.deepcopy(self.config)
         config['programs'].pop()

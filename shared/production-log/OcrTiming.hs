@@ -30,6 +30,8 @@ timeOcrRequestWithAngleCls action = do
 
 timedRequest :: String -> IO String -> IO String
 timedRequest options action = mask $ \restore -> do
+  configuredDispatch <- lookupEnv "PADDLEOCR_DISPATCH"
+  let dispatch = maybe "cpu" id configuredDispatch
   start <- getMonotonicTimeNSec
   outcome <- try (restore action) :: IO (Either SomeException String)
   finish <- getMonotonicTimeNSec
@@ -40,7 +42,7 @@ timedRequest options action = mask $ \restore -> do
         Left failure -> case fromException failure :: Maybe SomeAsyncException of
           Just _ -> "CANCELLED"
           Nothing -> "ERROR"
-      message = printf "[PaddleOCR] status=%s request_ms=%.3f%s\n" status elapsedMs options
+      message = printf "[PaddleOCR] status=%s request_ms=%.3f%s\n" status elapsedMs (options ++ " dispatch=" ++ dispatch)
   -- Write the whole ASCII line together. A logging IO error must not turn a
   -- successful recognition into NG or hide the original request exception.
   _ <- try (BS.hPut stderr (BS.pack message) >> hFlush stderr) :: IO (Either IOException ())

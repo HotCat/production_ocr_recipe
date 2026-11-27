@@ -18,7 +18,7 @@ import zmq
 
 
 @contextmanager
-def peer(reply, delay=0, profile="legacy_en", use_angle_cls=False):
+def peer(reply, delay=0, profile="legacy_en", use_angle_cls=False, dispatch="cpu"):
     ready = queue.Queue()
     errors = []
 
@@ -31,7 +31,7 @@ def peer(reply, delay=0, profile="legacy_en", use_angle_cls=False):
                 ready.put(f'tcp://127.0.0.1:{port}')
                 frames = socket.recv_multipart()
                 assert len(frames) == 2
-                expected = {'op': 'recognize', 'encoding': 'png', 'profile': profile}
+                expected = {'op': 'recognize', 'encoding': 'png', 'profile': profile, 'dispatch': dispatch}
                 if profile == 'legacy_en':
                     expected['use_angle_cls'] = use_angle_cls
                 assert json.loads(frames[0]) == expected, json.loads(frames[0])
@@ -70,10 +70,11 @@ def main():
             paths[text] = str(Path(directory) / (text + '.png'))
             assert cv2.imwrite(paths[text], image)
 
-        def recognize(endpoint, text='123456', timeout_ms=120000, angle_cls=False):
+        def recognize(endpoint, text='123456', timeout_ms=120000, angle_cls=False, dispatch="cpu"):
             environment = dict(os.environ, PADDLEOCR_ENDPOINT=endpoint,
                                PADDLEOCR_TIMEOUT_MS=str(timeout_ms),
-                               PADDLEOCR_USE_ANGLE_CLS='1' if angle_cls else '0')
+                               PADDLEOCR_USE_ANGLE_CLS='1' if angle_cls else '0',
+                               PADDLEOCR_DISPATCH=dispatch)
             return subprocess.run([binary, '--ocr-image', paths[text]], env=environment,
                                   capture_output=True, text=True, timeout=150)
 
@@ -87,6 +88,13 @@ def main():
                 result = recognize(endpoint, angle_cls=True)
                 assert result.returncode == 0 and result.stdout.strip() == 'SERIAL 123456', result
             print('PASS: enabled angle-classification setting reaches the service as JSON true')
+
+        for dispatch in ('gpu', 'auto'):
+            with peer(b'SERIAL 123456', profile=args.profile, dispatch=dispatch) as endpoint:
+                result = recognize(endpoint, dispatch=dispatch)
+                assert result.returncode == 0 and result.stdout.strip() == 'SERIAL 123456', result
+                assert 'dispatch=' + dispatch in result.stderr, result
+        print('PASS: gpu/auto routing settings reach the broker and runtime log')
 
         with peer(b'ERROR: test inference failure', profile=args.profile) as endpoint:
             result = recognize(endpoint)

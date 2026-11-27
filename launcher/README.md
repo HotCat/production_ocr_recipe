@@ -417,11 +417,19 @@ launcher/.venv/bin/python -m unittest discover -s launcher/tests -v
 
 ### Client CPU capabilities
 
+Per-app CPU/GPU selection is JSON-only: add `"ocr_dispatch": "cpu"`, `"gpu"`
+or `"auto"` beside a program's `name` (outside `values`). Missing fields use
+CPU; new defaults use `auto` for Engraving+Compare and CPU for the four English
+apps. After upgrading, restart the launcher; after JSON edits, reload its
+configuration and relaunch the affected app. `auto` prefers a ready GPU and
+uses CPU when GPU is unavailable. A failed GPU request is never replayed.
+See [GPU dispatch and offline deployment](../docs/GPU_OCR_DEPLOYMENT.md).
+
 Every PaddleOCR request now prints one timing entry to **运行日志**, without
 enabling CPU profiling:
 
 ```text
-[PaddleOCR] status=OK request_ms=123.456
+[PaddleOCR] status=OK request_ms=123.456 use_angle_cls=false dispatch=cpu
 ```
 
 `request_ms` is elapsed wall time in milliseconds for the complete client
@@ -431,6 +439,8 @@ Statuses are `OK`, `EMPTY`, `ERROR` (including timeouts) and `CANCELLED`.
 Errors still follow the application's existing NG/error handling. Timing goes
 to stderr, which the launcher captures alongside normal console output, while
 headless OCR command stdout continues to contain only the recognized text.
+`dispatch` is the requested policy; the service journal shows the actual device.
+The Chinese app omits `use_angle_cls` because that option applies to English.
 
 The five Haskell clients use two GHC RTS capabilities by default. The launcher
 starts them through `scripts/run-app.sh`, which explicitly sets `GHCRTS=-N2` and
